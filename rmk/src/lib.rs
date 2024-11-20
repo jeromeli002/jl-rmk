@@ -63,6 +63,7 @@ pub mod action;
 pub mod ble;
 mod debounce;
 pub mod direct_pin;
+mod device;
 mod flash;
 mod hid;
 mod keyboard;
