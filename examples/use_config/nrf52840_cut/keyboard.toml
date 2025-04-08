@@ -32,7 +32,7 @@ keymap = [
     ],
 ]
 
-[[encoder]]
+[[input_device.encoder]]
 pin_a = "P1_13"
 pin_b = "P0_02"
 
@@ -51,13 +51,13 @@ phase = "default"
 # 旋转编码器的方向是否反向。
 # reverse = false
 
-[[encoder]]
+[[input_device.encoder]]
 pin_a = "P1_09"
 pin_b = "P0_05"
 phase = "resolution"
 resolution = 2
 
-[[encoder]]
+[[input_device.encoder]]
 pin_a = "P1_10"
 pin_b = "P0_03"
 phase = "resolution"
