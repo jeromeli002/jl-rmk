@@ -1,9 +1,9 @@
 [keyboard]
-name = "RMK Keyboard"
-product_name = "My RMK Keyboard"
+name = "JL_CUT"
+product_name = "JLKB"
 vendor_id = 0x4c4b
 product_id = 0x4643
-manufacturer = "haobo"
+manufacturer = "JLKB"
 chip = "nrf52840"
 
 [matrix]
