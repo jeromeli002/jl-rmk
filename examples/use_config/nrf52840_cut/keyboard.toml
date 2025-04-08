@@ -73,7 +73,7 @@ phase = "default"
 
 [storage]
 # Storage feature is enabled by default
-# enabled = false
+enabled = true
 clear_storage = true
 
 [ble]
