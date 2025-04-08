@@ -32,17 +32,16 @@ keymap = [
     ],
 ]
 
+# Encoder 0
 [[input_device.encoder]]
 pin_a = "P1_13"
 pin_b = "P0_02"
-
 # Phase 是旋转编码器的工作模式。
 # 可用模式：
 # - default：兼容 EC11，分辨率 = 1
 # - e8h7：分辨率 = 2，反向 = true
 # - resolution：自定义分辨率，分辨率值和反向应稍后指定
 phase = "default" 
-
 # 分辨率表示编码器每转过一个棘爪产生的脉冲数。
 # 例如，如果您的旋转编码器总共有 30 个棘爪，并且每旋转 360 度产生 15 个脉冲，则分辨率 = 30/15 = 2。
 # 棘爪数和脉冲数可以在您的编码器数据手册中找到
@@ -50,18 +49,17 @@ phase = "default"
 
 # 旋转编码器的方向是否反向。
 # reverse = false
-
+# Encoder 1
 [[input_device.encoder]]
 pin_a = "P1_09"
 pin_b = "P0_05"
-phase = "resolution"
-resolution = 2
-
+phase = "default"
+# Encoder 2
 [[input_device.encoder]]
-pin_a = "P1_10"
-pin_b = "P0_03"
-phase = "resolution"
-resolution = 2
+pin_a = "P0_03"
+pin_b = "P0_28"
+phase = "default" 
+
 
 [light]
 # All light pins are high-active by default, uncomment if you want it to be low-active
@@ -76,7 +74,7 @@ resolution = 2
 [storage]
 # Storage feature is enabled by default
 # enabled = false
-# clear_storage = true
+clear_storage = true
 
 [ble]
 enabled = true
