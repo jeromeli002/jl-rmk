@@ -3,14 +3,14 @@ name = "JL_CUT"
 product_name = "JLKB"
 vendor_id = 0x4c4b
 product_id = 0x4643
-manufacturer = "jlkb"
+manufacturer = "JLKB"
 chip = "nrf52840"
 
 [matrix]
-# Input and output pins are mandatory
+# 输入和输出引脚是必需的ipunt→rows，output→cols
 input_pins = ["P0_09", "P0_24", "P0_00", "P0_13"]
 output_pins = ["P1_11", "P0_30", "P1_10", "P0_10"]
-# WARNING: Currently row2col/col2row is set in RMK's feature gate, row2col config here is valid ONLY when you're using cloud compilation
+# 警告：目前 row2col/col2row 在 RMK 的特性门中设置，只有在使用云编译时，此处的 row2col 配置才有效
 # row2col = true
 
 [layout]
@@ -62,25 +62,25 @@ pin_a = "P1_10"
 pin_b = "P0_03"
 phase = "resolution"
 resolution = 2
-
+ 
 [light]
-# All light pins are high-active by default, uncomment if you want it to be low-active
+# 默认情况下，所有灯光引脚都是高电平有效，如果希望低电平有效，请取消注释
 # capslock.pin = "P0_30"
 # capslock.low_active = false
 # scrolllock.pin = "PA3"
 # scrolllock.low_active = true
-# Just ignore if no light pin is used for it
+# 如果没有使用灯光引脚，请忽略
 # numslock.pin = "PA5"
 # numslock.low_active = true
 
 [storage]
-# Storage feature is enabled by default
+# 存储功能默认启用
 # enabled = false
 # clear_storage = true
 
 [ble]
 enabled = true
-# vddh has an internal voltage divider
+# vddh 具有内部电压分压器
 battery_adc_pin = "vddh"
 # Or
 # battery_adc_pin = "P0_04"
@@ -94,46 +94,46 @@ battery_adc_pin = "vddh"
 [behavior.combo]
 timeout = "150ms"
 combos = [
-  # Press J and K keys simultaneously to output "L"
+  # 同时按下 J 和 K 键以输出 "L"
   { actions = ["J", "K"], output = "L" },
-  # Press F and D keys simultaneously to switch to layer 2, but only valid on layer 0
+  # 同时按下 F 和 D 键切换到层 2，但仅在层 0 上有效
   { actions = ["F", "D"], output = "TO(1)", layer = 0 },
-  # Three-key combo, press A, S, and D keys to output "X"
+  # 三键组合，按下 A、S 和 D 键以输出 "X"
   { actions = ["A", "S", "D"], output = "X" }
 ]
 
 [behavior.fork]
 forks = [
-    # Shift + '.' output ':' key
+    # Shift + '.' 输出 ':' 键
   { trigger = "Dot", negative_output = "Dot", positive_output = "WM(Semicolon, LShift)", match_any = "LShift|RShift" },
 
-  # Shift + ',' output ';' key but only if no Alt is pressed
+  # Shift + ',' 输出 ';' 键，但前提是没有按下 Alt 键
   { trigger = "Comma", negative_output = "Comma", positive_output = "Semicolon", match_any = "LShift|RShift", match_none = "LAlt|RAlt" },  
   
-  # left bracket outputs by default '{', with shifts pressed outputs '['  
+  # 默认情况下，左括号输出 '{'，按下 Shift 键时输出 '['  
   { trigger = "LeftBracket", negative_output = "WM(LeftBracket, LShift)", positive_output = "LeftBracket", match_any = "LShift|RShift" },
 
-  # Flip the effect of shift on 'x'/'X'
+  # 翻转 Shift 对 'x'/'X' 的影响
   { trigger = "X", negative_output = "WM(X, LShift)", positive_output = "X", match_any = "LShift|RShift" },
 
-  # F24 usually outputs 'a', except when Left Shift or Ctrl pressed, in that case triggers a macro 
+  # F24 通常输出 'a'，除非按下左 Shift 或 Ctrl 键，在这种情况下会触发一个宏 
   { trigger = "F24", negative_output = "A", positive_output = "Macro1", match_any = "LShift|LCtrl" },
 
-  # Swap Z and Y keys if MouseBtn1 is pressed (on the keyboard) (Note that these must not be bindable to avoid infinite fork loops!) 
+  # 如果按下鼠标按键 1（在键盘上），则交换 Z 和 Y 键（请注意，这些键不能绑定，以避免无限的 fork 循环！) 
   { trigger = "Y", negative_output = "Y", positive_output = "Z", match_any = "MouseBtn1", bindable = false },
   { trigger = "Z", negative_output = "Z", positive_output = "Y", match_any = "MouseBtn1", bindable = false },
 
-  # Shift + Backspace output Delete key (inside a layer tap/hold)
+  # Shift + Backspace 输出 Delete 键（在层点击/按住内）
   { trigger = "LT(2,Backspace)", negative_output = "LT(2,Backspace)", positive_output = "LT(2,Delete)", match_any = "LShift|RShift" },
 
-  # Ctrl + play/pause will send next track. MediaPlayPause -> MediaNextTrack
-  # Ctrl + Shift + play/pause will send previous track. MediaPlayPause -> MediaPrevTrack
-  # Alt + play/pause will send volume up. MediaPlayPause -> AudioVolUp
-  # Alt + Shift + play/pause will send volume down. MediaPlayPause -> AudioVolDown
-  # Ctrl + Alt + play/pause will send brightness up. MediaPlayPause -> BrightnessUp
-  # Ctrl + Alt + Shift + play/pause will send brightness down. MediaPlayPause -> BrightnessDown
-  # ( Note that the trigger and immediate trigger keys of the fork chain could be 'virtual keys', 
-  #   which will never output, like F23, but here multiple overrides demonstrated.)
+  # Ctrl + 播放/暂停 将发送下一曲。MediaPlayPause -> MediaNextTrack
+  # Ctrl + Shift + 播放/暂停 将发送上一曲。MediaPlayPause -> MediaPrevTrack
+  # Alt + 播放/暂停 将发送音量增大。MediaPlayPause -> AudioVolUp
+  # Alt + Shift + 播放/暂停 将发送音量减小。MediaPlayPause -> AudioVolDown
+  # Ctrl + Alt + 播放/暂停 将发送亮度增大。MediaPlayPause -> BrightnessUp
+  # Ctrl + Alt + Shift + 播放/暂停 将发送亮度减小。MediaPlayPause -> BrightnessDown
+  # ( 注意，fork 链的触发键和立即触发键可以是“虚拟键”， 
+  #   它永远不会输出，例如 F23，但这里演示了多个覆盖。)
   { trigger = "MediaPlayPause", negative_output = "MediaPlayPause", positive_output = "MediaNextTrack", match_any = "LCtrl|RCtrl", bindable = true },
   { trigger = "MediaNextTrack", negative_output = "MediaNextTrack", positive_output = "BrightnessUp", match_any = "LAlt|RAlt", bindable = true },
   { trigger = "BrightnessUp", negative_output = "BrightnessUp", positive_output = "BrightnessDown", match_any = "LShift|RShift", bindable = false },
