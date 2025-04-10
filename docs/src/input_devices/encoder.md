@@ -62,7 +62,7 @@ You can also use the resolution based phase:
     let pin_a = Input::new(AnyPin::from(p.P1_06), embassy_nrf::gpio::Pull::None);
     let pin_b = Input::new(AnyPin::from(p.P1_04), embassy_nrf::gpio::Pull::None);
     // Create an encoder with resolution = 2, reversed = false
-    let mut encoder = RotaryEncoder::with_resolution(pin_a, pin_b, 2, false, encoder_id)
+    let mut encoder = RotaryEncoder::with_resolution(pin_a, pin_b, 2, false, encoder_id);
 ```
 
 After creating the rotary encoder device, a corresponding processor is also needed:
