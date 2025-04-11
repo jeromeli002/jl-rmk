@@ -140,9 +140,17 @@ async fn main(spawner: Spawner) {
     let light_controller: LightController<Output> =
         LightController::new(ControllerConfig::default().light_config);
 
-    let pin_a = Input::new(AnyPin::from(p.P1_09), embassy_nrf::gpio::Pull::Up);
-    let pin_b = Input::new(AnyPin::from(p.P0_05), embassy_nrf::gpio::Pull::Up);
-    let mut encoder = RotaryEncoder::with_phase(pin_a, pin_b, DefaultPhase, 0);
+    let pin_a0 = Input::new(AnyPin::from(p.P0_02), embassy_nrf::gpio::Pull::Up);
+    let pin_b0 = Input::new(AnyPin::from(p.P1_13), embassy_nrf::gpio::Pull::Up);
+    let mut encoder0 = RotaryEncoder::with_resolution(pin_a0, pin_b0, 4, false, 0);
+    
+    let pin_a1 = Input::new(AnyPin::from(p.P0_05), embassy_nrf::gpio::Pull::Up);
+    let pin_b1 = Input::new(AnyPin::from(p.P1_09), embassy_nrf::gpio::Pull::Up);
+    let mut encoder1 = RotaryEncoder::with_resolution(pin_a1, pin_b1, 4, false, 1);
+    
+    let pin_a2 = Input::new(AnyPin::from(p.P0_28), embassy_nrf::gpio::Pull::Up);
+    let pin_b2 = Input::new(AnyPin::from(p.P0_03), embassy_nrf::gpio::Pull::Up);
+    let mut encoder2 = RotaryEncoder::with_resolution(pin_a2, pin_b2, 2, false, 2);
     
     let mut adc_device = NrfAdc::new(saadc, [AnalogEventType::Battery], 12000, None);
     let mut batt_proc = BatteryProcessor::new(2000, 2806, &keymap);
@@ -152,7 +160,7 @@ async fn main(spawner: Spawner) {
     // Start
     join4(
         run_devices! (
-            (matrix, encoder, adc_device) => EVENT_CHANNEL,
+            (matrix, encoder0,encoder1,encoder2, adc_device) => EVENT_CHANNEL,
         ),
         run_processor_chain! {
             EVENT_CHANNEL => [encoder_processor, batt_proc],

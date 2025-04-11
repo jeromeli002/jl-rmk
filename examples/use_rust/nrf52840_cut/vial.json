@@ -10,63 +10,63 @@
     "customKeycodes": [
         {
             "name": "BT0",
-            "title": "Bluetooth Channel 0",
-            "shortName": "BT0"
+            "title": "蓝牙通道0",
+            "shortName": "通道\n0"
         },
         {
             "name": "BT1",
-            "title": "Bluetooth Channel 1",
-            "shortName": "BT1"
+            "title": "蓝牙通道1",
+            "shortName": "通道\n1"
         },
         {
             "name": "BT2",
-            "title": "Bluetooth Channel 2",
-            "shortName": "BT2"
+            "title": "蓝牙通道2",
+            "shortName": "通道\n2"
         },
         {
             "name": "BT3",
-            "title": "Bluetooth Channel 3",
-            "shortName": "BT3"
+            "title": "蓝牙通道3",
+            "shortName": "通道\n3"
         },
         {
             "name": "BT4",
-            "title": "Bluetooth Channel 4",
-            "shortName": "BT4"
+            "title": "蓝牙通道4",
+            "shortName": "通道\n4"
         },
         {
             "name": "BT5",
-            "title": "Bluetooth Channel 5",
-            "shortName": "BT5"
+            "title": "蓝牙通道5",
+            "shortName": "通道\n5"
         },
         {
             "name": "BT6",
-            "title": "Bluetooth Channel 6",
-            "shortName": "BT6"
+            "title": "蓝牙通道6",
+            "shortName": "通道\n6"
         },
         {
             "name": "BT7",
-            "title": "Bluetooth Channel 7",
-            "shortName": "BT7"
+            "title": "蓝牙通道7",
+            "shortName": "通道\n7"
         },
         {
             "name": "NEXT_BT",
-            "title": "Switch to the next Bluetooth channel",
-            "shortName": "Next\nBT"
+            "title": "切换到下一个蓝牙通道",
+            "shortName": "下一\n通道"
         },
         {
             "name": "PREV_BT",
-            "title": "Switch to the previous Bluetooth channel",
-            "shortName": "Prev\nBT"
+            "title": "切换到上一个蓝牙通道",
+            "shortName": "上一\n通道"
         },
         {
             "name": "CLR_BT",
-            "title": "Clear bond info for current channel",
-            "shortName": "Clear\nBT"
+            "title": "清除当前通道连接",
+            "shortName": "清除\n连接"
         },
         {
             "name": "SWITCH",
-            "title": "Switch default output mode between USB/BLE",
-            "shortName": "Switch\nOutput"
+            "title": "USB/蓝牙模式切换",
+            "shortName": "模式\n切换"
         }
     ],
   "layouts": {
