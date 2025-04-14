@@ -9,6 +9,7 @@ use super::SplitMessage;
 use crate::channel::{EVENT_CHANNEL, KEY_EVENT_CHANNEL};
 #[cfg(not(feature = "_ble"))]
 use crate::split::serial::SerialSplitDriver;
+use crate::state::ConnectionState;
 use crate::CONNECTION_STATE;
 
 /// Run the split peripheral service.
@@ -56,7 +57,7 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
     /// The peripheral uses the general matrix, does scanning and send the key events through `SplitWriter`.
     /// If also receives split messages from the central through `SplitReader`.
     pub(crate) async fn run(&mut self) {
-        CONNECTION_STATE.store(true, core::sync::atomic::Ordering::Release);
+        CONNECTION_STATE.store(ConnectionState::Connected.into(), core::sync::atomic::Ordering::Release);
         loop {
             match select3(
                 self.split_driver.read(),
