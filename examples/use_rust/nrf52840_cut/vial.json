@@ -1,0 +1,81 @@
+{
+    "name": "JLKB-CUT",
+    "vendorId": "0x4C4B",
+    "productId": "0x4643",
+    "lighting": "none",
+    "matrix": {
+        "rows": 4,
+        "cols": 4
+    },
+    "customKeycodes": [
+        {
+            "name": "BT0",
+            "title": "蓝牙通道0",
+            "shortName": "通道\n0"
+        },
+        {
+            "name": "BT1",
+            "title": "蓝牙通道1",
+            "shortName": "通道\n1"
+        },
+        {
+            "name": "BT2",
+            "title": "蓝牙通道2",
+            "shortName": "通道\n2"
+        },
+        {
+            "name": "BT3",
+            "title": "蓝牙通道3",
+            "shortName": "通道\n3"
+        },
+        {
+            "name": "BT4",
+            "title": "蓝牙通道4",
+            "shortName": "通道\n4"
+        },
+        {
+            "name": "BT5",
+            "title": "蓝牙通道5",
+            "shortName": "通道\n5"
+        },
+        {
+            "name": "BT6",
+            "title": "蓝牙通道6",
+            "shortName": "通道\n6"
+        },
+        {
+            "name": "BT7",
+            "title": "蓝牙通道7",
+            "shortName": "通道\n7"
+        },
+        {
+            "name": "NEXT_BT",
+            "title": "切换到下一个蓝牙通道",
+            "shortName": "下一\n通道"
+        },
+        {
+            "name": "PREV_BT",
+            "title": "切换到上一个蓝牙通道",
+            "shortName": "上一\n通道"
+        },
+        {
+            "name": "CLR_BT",
+            "title": "清除当前通道连接",
+            "shortName": "清除\n连接"
+        },
+        {
+            "name": "SWITCH",
+            "title": "USB/蓝牙模式切换",
+            "shortName": "模式\n切换"
+        }
+    ],
+  "layouts": {
+   "keymap":[
+["0,0",{"x":0.25},"0,1",{"x":0.25},"0,2",{"x":0.25},"0,3"],
+[{"y":-0.25,"x":5.25},"1,0\n\n\n\n\n\n\n\n\ne","2,3","1,1\n\n\n\n\n\n\n\n\ne"],
+[{"y":1.5},"2,0",{"x":0.5},"2,0\n\n\n\n\n\n\n\n\ne",{"x":1.5},"2,1\n\n\n\n\n\n\n\n\ne",{"x":0.5},"1,0",{"x":0.25},"1,1"],
+[{"y":0.25},"2,1",{"x":0.75},"0,0\n\n\n\n\n\n\n\n\ne","2,2","0,1\n\n\n\n\n\n\n\n\ne",{"x":0.75},"1,2",{"x":0.25},"1,3"]
+    ]
+ }
+}
+
