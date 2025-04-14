@@ -37,6 +37,10 @@ keymap = [
 [[input_device.encoder]]
 pin_a = "P1_13"
 pin_b = "P0_02"
+
+# Whether to use the MCU's internal pull-up resistor, default to false
+internal_pullup = false
+
 # Phase 是旋转编码器的工作模式。
 # 可用模式：
 # - default：兼容 EC11，分辨率 = 1
@@ -54,11 +58,13 @@ phase = "default"
 [[input_device.encoder]]
 pin_a = "P1_09"
 pin_b = "P0_05"
+internal_pullup = false
 phase = "default"
 # Encoder 2
 [[input_device.encoder]]
 pin_a = "P0_03"
 pin_b = "P0_28"
+internal_pullup = false
 phase = "default" 
 
 [light]
