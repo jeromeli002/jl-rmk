@@ -138,13 +138,13 @@ async fn main(spawner: Spawner) {
     // Initialize flash
     let flash = Flash::take(mpsl, p.NVMC);
 
-    // Initialize IO Pins
-    let (input_pins, output_pins) = config_matrix_pins_nrf!(peripherals: p, input: [P0_09, P0_24, P0_00, P0_13], output:  [P1_11, P0_30, P1_10, P0_10]);
+    // Initialize IO Pins(output-cols,input-rows)
+    let (input_pins, output_pins) = config_matrix_pins_nrf!(peripherals: p, input: [P0_02, P0_30, P0_00, P1_09, P0_01], output:  [P1_11, P1_10, P0_03, P0_28, P1_13]);
 
     // Initialize the ADC.
     // We are only using one channel for detecting battery level
-    let adc_pin = p.P0_04.degrade_saadc();
-    let is_charging_pin = Input::new(p.P1_07, embassy_nrf::gpio::Pull::Up);
+    let adc_pin = p.P0_05.degrade_saadc();
+    let is_charging_pin = Input::new(p.P0_08, embassy_nrf::gpio::Pull::Up);
     let saadc = init_adc(adc_pin, p.SAADC);
     // Wait for ADC calibration.
     saadc.calibrate().await;
@@ -192,15 +192,26 @@ async fn main(spawner: Spawner) {
     let mut keyboard = Keyboard::new(&keymap, rmk_config.behavior_config.clone());
 
     // Initialize the encoder
-    let pin_a0 = Input::new(p.P0_02, embassy_nrf::gpio::Pull::Up);
-    let pin_b0 = Input::new(p.P1_13, embassy_nrf::gpio::Pull::Up);
+    let pin_a0 = Input::new(p.P0_10, embassy_nrf::gpio::Pull::Up);
+    let pin_b0 = Input::new(p.P0_09, embassy_nrf::gpio::Pull::Up);
+    // Create an encoder with resolution = 2, reversed = false
     let mut encoder0 = RotaryEncoder::with_resolution(pin_a0, pin_b0, 4, false, 0);
-    let pin_a1 = Input::new(p.P0_05, embassy_nrf::gpio::Pull::Up);
-    let pin_b1 = Input::new(p.P1_09, embassy_nrf::gpio::Pull::Up);
+    let pin_a1 = Input::new(p.P0_24, embassy_nrf::gpio::Pull::Up);
+    let pin_b1 = Input::new(p.P0_13, embassy_nrf::gpio::Pull::Up);
+    // Create an encoder with resolution = 2, reversed = false
     let mut encoder1 = RotaryEncoder::with_resolution(pin_a1, pin_b1, 4, false, 1);
-    let pin_a2 = Input::new(p.P0_28, embassy_nrf::gpio::Pull::Up);
-    let pin_b2 = Input::new(p.P0_03, embassy_nrf::gpio::Pull::Up);
-    let mut encoder2 = RotaryEncoder::with_resolution(pin_a2, pin_b2, 2, false, 2);
+    let pin_a2 = Input::new(p.P0_17, embassy_nrf::gpio::Pull::Up);
+    let pin_b2 = Input::new(p.P0_15, embassy_nrf::gpio::Pull::Up);
+    // Create an encoder with resolution = 2, reversed = false
+    let mut encoder2 = RotaryEncoder::with_resolution(pin_a2, pin_b2, 4, false, 2);
+    let pin_a3 = Input::new(p.P0_26, embassy_nrf::gpio::Pull::Up);
+    let pin_b3 = Input::new(p.P0_06, embassy_nrf::gpio::Pull::Up);
+    // Create an encoder with resolution = 2, reversed = false
+    let mut encoder3 = RotaryEncoder::with_resolution(pin_a3, pin_b3, 2, false, 3);
+    let pin_a4 = Input::new(p.P0_29, embassy_nrf::gpio::Pull::Up);
+    let pin_b4 = Input::new(p.P0_31, embassy_nrf::gpio::Pull::Up);
+    // Create an encoder with resolution = 2, reversed = false
+    let mut encoder4 = RotaryEncoder::with_resolution(pin_a4, pin_b4, 4, false, 4);
 
     let mut adc_device = NrfAdc::new(
         saadc,
@@ -217,7 +228,7 @@ async fn main(spawner: Spawner) {
 
     join4(
         run_devices! (
-            (matrix, encoder0,encoder1,encoder2, adc_device) => EVENT_CHANNEL,
+            (matrix, encoder0,encoder1,encoder2,encoder3,encoder4, adc_device) => EVENT_CHANNEL,
         ),
         run_processor_chain! {
             EVENT_CHANNEL => [encoder_processor, batt_proc],

@@ -59,7 +59,6 @@ embassy-usb = { git = "https://github.com/embassy-rs/embassy.git", rev = "cb4d8c
 embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git", rev = "cb4d8c74c2b07de7c32be588140512bdd4d3f47e" }
 nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "4f2af99b87ae07c0b5634d32e4a62e26876e5be3" }
 nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "4f2af99b87ae07c0b5634d32e4a62e26876e5be3" }
-# bt-hci = { git = "https://github.com/embassy-rs/bt-hci.git", rev = "3755da87d0ef8660c5f9d4694b928ad7f679299a" }
 
 [build-dependencies]
 xz2 = "0.1.7"

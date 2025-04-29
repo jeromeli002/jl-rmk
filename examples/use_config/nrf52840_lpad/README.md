@@ -54,7 +54,7 @@ After you have `memory.x` set, use `cargo run --release` to flash the RMK firmwa
 
 1. Enter example folder:
    ```shell
-   cd examples/use_rust/nrf52840_ble
+   cd examples/use_config/nrf52840_ble
    ```
 2. Compile, flash and run the example
    ```shell
