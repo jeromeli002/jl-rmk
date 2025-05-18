@@ -23,13 +23,15 @@ use rand_chacha::ChaCha12Rng;
 use rand_core::SeedableRng;
 use rmk::ble::trouble::build_ble_stack;
 use rmk::channel::EVENT_CHANNEL;
-use rmk::config::{BleBatteryConfig, ControllerConfig, KeyboardUsbConfig, RmkConfig, StorageConfig, VialConfig};
+use rmk::config::{
+    BehaviorConfig, BleBatteryConfig, ControllerConfig, KeyboardUsbConfig, RmkConfig, StorageConfig, VialConfig,
+};
 use rmk::debounce::default_debouncer::DefaultDebouncer;
 use rmk::futures::future::join4;
 use rmk::input_device::Runnable;
 use rmk::input_device::adc::{AnalogEventType, NrfAdc};
 use rmk::input_device::battery::BatteryProcessor;
-use rmk::input_device::rotary_encoder::{ RotaryEncoder, RotaryEncoderProcessor};
+use rmk::input_device::rotary_encoder::{DefaultPhase, RotaryEncoder, RotaryEncoderProcessor};
 use rmk::keyboard::Keyboard;
 use rmk::light::LightController;
 use rmk::matrix::Matrix;
@@ -138,13 +140,13 @@ async fn main(spawner: Spawner) {
     // Initialize flash
     let flash = Flash::take(mpsl, p.NVMC);
 
-    // Initialize IO Pins(output-cols,input-rows)
+    // Initialize IO Pins
     let (input_pins, output_pins) = config_matrix_pins_nrf!(peripherals: p, input: [P0_02, P0_30, P0_00, P1_09, P0_01], output:  [P1_11, P1_10, P0_03, P0_28, P1_13]);
 
     // Initialize the ADC.
     // We are only using one channel for detecting battery level
     let adc_pin = p.P0_05.degrade_saadc();
-    let is_charging_pin = Input::new(p.P0_08, embassy_nrf::gpio::Pull::Up);
+    let is_charging_pin = Input::new(p.P1_08, embassy_nrf::gpio::Pull::Up);
     let saadc = init_adc(adc_pin, p.SAADC);
     // Wait for ADC calibration.
     saadc.calibrate().await;
@@ -175,13 +177,14 @@ async fn main(spawner: Spawner) {
     // Initialze keyboard stuffs
     // Initialize the storage and keymap
     let mut default_keymap = keymap::get_default_keymap();
+    let behavior_config = BehaviorConfig::default();
     let mut encoder_map = keymap::get_default_encoder_map();
     let (keymap, mut storage) = initialize_encoder_keymap_and_storage(
         &mut default_keymap,
         &mut encoder_map,
         flash,
-        rmk_config.storage_config,
-        rmk_config.behavior_config.clone(),
+        &storage_config,
+        behavior_config,
     )
     .await;
 
@@ -189,7 +192,7 @@ async fn main(spawner: Spawner) {
     let debouncer = DefaultDebouncer::<ROW, COL>::new();
     let mut matrix = Matrix::<_, _, _, ROW, COL>::new(input_pins, output_pins, debouncer);
     // let mut matrix = TestMatrix::<ROW, COL>::new();
-    let mut keyboard = Keyboard::new(&keymap, rmk_config.behavior_config.clone());
+    let mut keyboard = Keyboard::new(&keymap);
 
     // Initialize the encoder
     let pin_a0 = Input::new(p.P0_10, embassy_nrf::gpio::Pull::Up);

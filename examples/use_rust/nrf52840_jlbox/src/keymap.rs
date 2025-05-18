@@ -125,6 +125,5 @@ pub const fn get_default_encoder_map() -> [[EncoderAction; NUM_ENCODER]; NUM_LAY
             encoder!(k!(KbVolumeUp), k!(KbVolumeDown)),
             encoder!(k!(KbVolumeUp), k!(KbVolumeDown)),
         ],
-        
     ]
 }
