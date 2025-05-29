@@ -4,7 +4,7 @@ sudo apt update
 
 # 1. 安装必要的软件包
 echo "安装必要的软件包: curl, git, rustup, clang..."
-sudo apt install -y curl git rustup clang
+sudo apt install -y curl git clang
 
 # 2. 安装 Rust (使用 rustup)
 echo "安装 Rust..."
