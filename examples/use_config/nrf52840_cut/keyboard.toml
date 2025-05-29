@@ -49,24 +49,24 @@ keymap = [
 
 # Encoder 0
 [[input_device.encoder]]
-pin_a = "P1_13"
-pin_b = "P0_02"
+pin_a = "P0_02"
+pin_b = "P1_13"
 phase = "resolution"
 internal_pullup = true
 resolution = 4
 reverse = false
 # Encoder 1
 [[input_device.encoder]]
-pin_a = "P1_09"
-pin_b = "P0_05"
+pin_a = "P0_05"
+pin_b = "P1_09"
 phase = "resolution"
 internal_pullup = true
 resolution = 4
 reverse = false
 # Encoder 2
 [[input_device.encoder]]
-pin_a = "P0_03"
-pin_b = "P0_28"
+pin_a = "P0_28"
+pin_b = "P0_03"
 phase = "resolution"
 internal_pullup = true
 resolution = 2
