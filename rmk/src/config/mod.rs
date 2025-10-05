@@ -91,29 +91,32 @@ impl Default for MorsesConfig {
     }
 }
 
-/// Per key position information about a key
-/// In the future more fields can be added here for the future configurator GUI
+/// Configuration that's only related to the key's position.
+///
+/// Now only the hand information is included.
+/// In the future more fields can be added here for the future configurator GUI, such as
 /// - physical key position and orientation
 /// - key size,
 /// - key shape,
 /// - backlight sequence number, etc.
+///
 /// IDEA: For Keyboards with low memory, these should be compile time constants to save RAM?
-#[derive(Clone, Copy, Default, Debug)]
-pub struct KeyInfo {
-    /// store hand information for unilateral_tap processing
-    pub hand: Hand,
-    /// this gives possibility to override some the default MorseProfile setting in certain key positions (typically home row mods)
-    pub morse_profile_override: MorseProfile,
+#[derive(Debug)]
+pub struct PositionalConfig<const ROW: usize, const COL: usize> {
+    pub hand: [[Hand; COL]; ROW],
 }
 
-#[derive(Debug, Default)]
-pub struct PerKeyConfig<const ROW: usize, const COL: usize> {
-    pub key_info: Option<[[KeyInfo; COL]; ROW]>,
+impl<const ROW: usize, const COL: usize> Default for PositionalConfig<ROW, COL> {
+    fn default() -> Self {
+        Self {
+            hand: [[Hand::default(); COL]; ROW],
+        }
+    }
 }
 
-impl<const ROW: usize, const COL: usize> PerKeyConfig<ROW, COL> {
-    pub fn new(key_info: Option<[[KeyInfo; COL]; ROW]>) -> Self {
-        Self { key_info }
+impl<const ROW: usize, const COL: usize> PositionalConfig<ROW, COL> {
+    pub fn new(hand: [[Hand; COL]; ROW]) -> Self {
+        Self { hand }
     }
 }
 
@@ -134,7 +137,7 @@ impl Default for OneShotConfig {
 /// Config for combo behavior
 #[derive(Clone, Debug)]
 pub struct CombosConfig {
-    pub combos: Vec<Combo, COMBO_MAX_NUM>,
+    pub combos: [Option<Combo>; COMBO_MAX_NUM],
     pub timeout: Duration,
 }
 
@@ -142,7 +145,7 @@ impl Default for CombosConfig {
     fn default() -> Self {
         Self {
             timeout: Duration::from_millis(50),
-            combos: Vec::new(),
+            combos: [None; COMBO_MAX_NUM],
         }
     }
 }

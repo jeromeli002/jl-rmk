@@ -5,7 +5,7 @@ pub mod common;
 
 use embassy_time::Duration;
 use rmk::combo::Combo;
-use rmk::config::{BehaviorConfig, CombosConfig, Hand, KeyInfo, MorsesConfig};
+use rmk::config::{BehaviorConfig, CombosConfig, Hand, MorsesConfig};
 use rmk::k;
 use rmk::keyboard::Keyboard;
 use rmk::types::action::{Action, KeyAction};
@@ -18,28 +18,7 @@ use crate::common::morse::create_morse_keyboard;
 use crate::common::{KC_LGUI, KC_LSHIFT};
 
 fn create_hrm_keyboard() -> Keyboard<'static, 1, 5, 2> {
-    let key_info = Some([[
-        KeyInfo {
-            hand: Hand::Left,
-            ..Default::default()
-        },
-        KeyInfo {
-            hand: Hand::Left,
-            ..Default::default()
-        },
-        KeyInfo {
-            hand: Hand::Right,
-            ..Default::default()
-        },
-        KeyInfo {
-            hand: Hand::Right,
-            ..Default::default()
-        },
-        KeyInfo {
-            hand: Hand::Right,
-            ..Default::default()
-        },
-    ]]);
+    let hand = [[Hand::Left, Hand::Left, Hand::Right, Hand::Right, Hand::Right]];
     create_morse_keyboard(
         BehaviorConfig {
             // All unknown hand, not home row
@@ -56,7 +35,7 @@ fn create_hrm_keyboard() -> Keyboard<'static, 1, 5, 2> {
             },
             ..Default::default()
         },
-        key_info,
+        hand,
     )
 }
 
@@ -73,28 +52,7 @@ fn create_hrm_keyboard_with_combo() -> Keyboard<'static, 1, 5, 2> {
     );
     let combo_key_3 = KeyAction::TapHold(Action::Key(KeyCode::D), Action::LayerOn(1), Default::default());
 
-    let key_info: Option<[[KeyInfo; 5]; 1]> = Some([[
-        KeyInfo {
-            hand: Hand::Left,
-            ..Default::default()
-        },
-        KeyInfo {
-            hand: Hand::Left,
-            ..Default::default()
-        },
-        KeyInfo {
-            hand: Hand::Right,
-            ..Default::default()
-        },
-        KeyInfo {
-            hand: Hand::Right,
-            ..Default::default()
-        },
-        KeyInfo {
-            hand: Hand::Right,
-            ..Default::default()
-        },
-    ]]);
+    let hand = [[Hand::Left, Hand::Left, Hand::Right, Hand::Right, Hand::Right]];
 
     create_morse_keyboard(
         BehaviorConfig {
@@ -111,16 +69,21 @@ fn create_hrm_keyboard_with_combo() -> Keyboard<'static, 1, 5, 2> {
                 ..Default::default()
             },
             combo: CombosConfig {
-                combos: heapless::Vec::from_iter([
-                    Combo::new([combo_key, combo_key_2], k!(X), None),
-                    Combo::new([k!(A), combo_key], k!(Y), None),
-                    Combo::new([combo_key, combo_key_2, combo_key_3], k!(Z), None),
-                ]),
+                combos: [
+                    Some(Combo::new([combo_key, combo_key_2], k!(X), None)),
+                    Some(Combo::new([k!(A), combo_key], k!(Y), None)),
+                    Some(Combo::new([combo_key, combo_key_2, combo_key_3], k!(Z), None)),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ],
                 timeout: Duration::from_millis(50),
             },
             ..BehaviorConfig::default()
         },
-        key_info,
+        hand,
     )
 }
 

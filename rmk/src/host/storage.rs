@@ -84,9 +84,9 @@ impl Value<'_> for KeymapData {
             KeymapData::KeymapKey(k) => {
                 buffer[0] = StorageKeys::KeymapConfig as u8;
                 BigEndian::write_u16(&mut buffer[1..3], to_via_keycode(k.action));
-                buffer[3] = k.layer as u8;
-                buffer[4] = k.col as u8;
-                buffer[5] = k.row as u8;
+                buffer[3] = k.layer;
+                buffer[4] = k.col;
+                buffer[5] = k.row;
                 Ok(6)
             }
 
@@ -94,8 +94,8 @@ impl Value<'_> for KeymapData {
                 buffer[0] = StorageKeys::EncoderKeys as u8;
                 BigEndian::write_u16(&mut buffer[1..3], to_via_keycode(e.action.clockwise()));
                 BigEndian::write_u16(&mut buffer[3..5], to_via_keycode(e.action.counter_clockwise()));
-                buffer[5] = e.idx as u8;
-                buffer[6] = e.layer as u8;
+                buffer[5] = e.idx;
+                buffer[6] = e.layer;
                 Ok(7)
             }
 
@@ -304,14 +304,16 @@ impl Value<'_> for KeymapData {
                         return Err(SerializationError::InvalidData);
                     }
 
-                    let mut morse = Morse::default();
-                    morse.profile = profile;
+                    let mut morse = Morse {
+                        profile,
+                        ..Default::default()
+                    };
 
                     let mut i = 7;
                     for _ in 0..count {
                         let pattern = MorsePattern::from_u16(BigEndian::read_u16(&buffer[i..i + 2]));
                         let key_action = from_via_keycode(BigEndian::read_u16(&buffer[i + 2..i + 4]));
-                        _ = morse.actions.push((pattern, key_action.to_action()));
+                        _ = morse.actions.insert(pattern, key_action.to_action());
                         i += 4;
                     }
 
@@ -402,7 +404,7 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
         Ok(())
     }
 
-    pub(crate) async fn read_combos(&mut self, combos: &mut Vec<Combo, COMBO_MAX_NUM>) -> Result<(), ()> {
+    pub(crate) async fn read_combos(&mut self, combos: &mut [Option<Combo>; COMBO_MAX_NUM]) -> Result<(), ()> {
         for (i, item) in combos.iter_mut().enumerate() {
             let key = get_combo_key(i);
             let read_data = fetch_item::<u32, StorageData, _>(
@@ -415,12 +417,15 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
             .await
             .map_err(|e| print_storage_error::<F>(e))?;
 
-            if let Some(StorageData::VialData(KeymapData::Combo(combo))) = read_data {
+            if let Some(StorageData::VialData(KeymapData::Combo(mut combo))) = read_data {
+                debug!("Read combo: {:?}", combo);
                 let mut actions: Vec<KeyAction, COMBO_MAX_LENGTH> = Vec::new();
+                combo.idx = i;
                 for &action in combo.actions.iter().filter(|&&a| !a.is_empty()) {
                     let _ = actions.push(action);
                 }
-                *item = Combo::new(actions, combo.output, item.layer);
+                // TODO: Save/Load combo layer in storage
+                *item = Some(Combo::new(actions, combo.output, None));
             }
         }
 
@@ -551,19 +556,19 @@ mod tests {
                 Some(210u16),
                 Some(220u16),
             ),
-            actions: Vec::default(),
+            actions: heapless::LinearMap::default(),
         };
         morse
             .actions
-            .push((MorsePattern::from_u16(0b1_01), Action::Key(KeyCode::A)))
+            .insert(MorsePattern::from_u16(0b1_01), Action::Key(KeyCode::A))
             .ok();
         morse
             .actions
-            .push((MorsePattern::from_u16(0b1_1000), Action::Key(KeyCode::B)))
+            .insert(MorsePattern::from_u16(0b1_1000), Action::Key(KeyCode::B))
             .ok();
         morse
             .actions
-            .push((MorsePattern::from_u16(0b1_1010), Action::Key(KeyCode::C)))
+            .insert(MorsePattern::from_u16(0b1_1010), Action::Key(KeyCode::C))
             .ok();
 
         // Serialization
