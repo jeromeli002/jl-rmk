@@ -1347,6 +1347,13 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
 
     // Process action key
     async fn process_action_key(&mut self, key: KeyCode, event: KeyboardEvent) {
+        if matches!(key, KeyCode::TriLayerLower | KeyCode::TriLayerUpper) {
+            // Check tri-layer first
+            let layer = if key == KeyCode::TriLayerLower { 1 } else { 2 };
+            self.process_action_layer_switch(layer, event);
+            self.keymap.borrow_mut().update_fn_layer_state();
+            return;
+        }
         let key = match key {
             KeyCode::GraveEscape => {
                 if self.held_modifiers.into_bits() == 0 {
@@ -1719,7 +1726,7 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
             if event.pressed {
                 // Clear Peer is processed when pressed
                 if id == NUM_BLE_PROFILE as u8 + 4 {
-                    #[cfg(feature = "split")]
+                    #[cfg(all(feature = "split", feature = "_ble"))]
                     if event.pressed {
                         // Wait for 5s, if the key is still pressed, clear split peer info
                         // If there's any other key event received during this period, skip
@@ -1727,8 +1734,8 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
                             Either::First(_) => {
                                 // Timeout reached, send clear peer message
                                 info!("Clear peer");
-                                if let Ok(publisher) = crate::channel::SPLIT_MESSAGE_PUBLISHER.publisher() {
-                                    publisher.publish_immediate(crate::split::SplitMessage::ClearPeer);
+                                if let Ok(publisher) = crate::channel::CONTROLLER_CHANNEL.publisher() {
+                                    publisher.publish_immediate(crate::event::ControllerEvent::ClearPeer);
                                 }
                             }
                             Either::Second(e) => {

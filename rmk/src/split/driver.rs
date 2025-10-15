@@ -9,8 +9,8 @@ use {crate::channel::FLASH_CHANNEL, crate::split::ble::PeerAddress, crate::stora
 
 use super::SplitMessage;
 use crate::CONNECTION_STATE;
-use crate::channel::{EVENT_CHANNEL, KEY_EVENT_CHANNEL, SPLIT_MESSAGE_PUBLISHER};
-use crate::event::{Event, KeyboardEvent, KeyboardEventPos};
+use crate::channel::{CONTROLLER_CHANNEL, EVENT_CHANNEL, KEY_EVENT_CHANNEL};
+use crate::event::{ControllerEvent, Event, KeyboardEvent, KeyboardEventPos};
 use crate::input_device::InputDevice;
 
 #[derive(Debug, Clone, Copy)]
@@ -76,7 +76,7 @@ impl<const ROW: usize, const COL: usize, const ROW_OFFSET: usize, const COL_OFFS
         }
 
         let mut last_sync_time = Instant::now();
-        let mut subscriber = SPLIT_MESSAGE_PUBLISHER
+        let mut subscriber = CONTROLLER_CHANNEL
             .subscriber()
             .expect("Failed to create split message subscriber: MaximumSubscribersReached");
 
@@ -102,11 +102,12 @@ impl<const ROW: usize, const COL: usize, const ROW_OFFSET: usize, const COL_OFFS
                         EVENT_CHANNEL.send(event).await;
                     }
                 },
-                Either3::Second(split_message) => {
-                    #[cfg(all(feature = "storage", feature = "_ble"))]
-                    match split_message {
-                        SplitMessage::ClearPeer => {
-                            // Clear the peer address
+                Either3::Second(controller_msg) => {
+                    match controller_msg {
+                        #[cfg(feature = "_ble")]
+                        ControllerEvent::ClearPeer => {
+                            #[cfg(feature = "storage")]
+                            // Clear the peer address in storage
                             FLASH_CHANNEL
                                 .send(FlashOperationMessage::PeerAddress(PeerAddress::new(
                                     self.id as u8,
@@ -114,15 +115,44 @@ impl<const ROW: usize, const COL: usize, const ROW_OFFSET: usize, const COL_OFFS
                                     [0; 6],
                                 )))
                                 .await;
+
+                            // Write `ClearPeer` message to peripheral
+                            debug!("Write ClearPeer message to peripheral {}", self.id);
+                            if let Err(e) = self.transceiver.write(&SplitMessage::ClearPeer).await {
+                                match e {
+                                    SplitDriverError::Disconnected => return,
+                                    _ => error!("SplitDriver write error: {:?}", e),
+                                }
+                            }
                         }
-                        _ => (),
-                    }
-                    debug!("Publishing split message {:?} to peripherals", split_message);
-                    if let Err(e) = self.transceiver.write(&split_message).await {
-                        match e {
-                            SplitDriverError::Disconnected => return,
-                            _ => error!("SplitDriver write error: {:?}", e),
+                        ControllerEvent::KeyboardIndicator(led_indicator) => {
+                            // Send KeyboardIndicator state to peripheral
+                            debug!(
+                                "Sending KeyboardIndicator to peripheral {}: {:?}",
+                                self.id, led_indicator
+                            );
+                            if let Err(e) = self
+                                .transceiver
+                                .write(&SplitMessage::KeyboardIndicator(led_indicator.into_bits()))
+                                .await
+                            {
+                                match e {
+                                    SplitDriverError::Disconnected => return,
+                                    _ => error!("SplitDriver write error: {:?}", e),
+                                }
+                            }
                         }
+                        ControllerEvent::Layer(layer) => {
+                            // Send layer number to peripheral
+                            debug!("Sending layer number to peripheral {}: {}", self.id, layer);
+                            if let Err(e) = self.transceiver.write(&SplitMessage::Layer(layer)).await {
+                                match e {
+                                    SplitDriverError::Disconnected => return,
+                                    _ => error!("SplitDriver write error: {:?}", e),
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 Either3::Third(_) => {

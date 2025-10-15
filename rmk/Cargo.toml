@@ -77,7 +77,7 @@ pio = { version = "0.3.0", optional = true }
 fixed = { version = "1.28.0", optional = true }
 
 # ESP32 dependencies
-esp-hal = { version = "1.0.0-rc.0", optional = true }
+esp-hal = { version = "1.0.0-rc.1", optional = true }
 
 # Document feature
 document-features = "0.2"
@@ -171,11 +171,13 @@ async_matrix = ["dep:embedded-hal-async"]
 ## Use rapid debouncer
 rapid_debouncer = []
 
-## Enable split keyboard support
-split = []
-
-## Enable to use controllers to control other hardwares on the board
+## Enable to use controllers to control other hardwares on the board or peripheral
 controller = []
+
+## Enable split keyboard support. 
+## 
+## The split peripheral is regarded as a controller subscriber, so the split feature requires controller feature.
+split = ["controller"]
 
 ## Enable feature to use rp2040 specific features, like PIO and bootrom
 rp2040 = [
