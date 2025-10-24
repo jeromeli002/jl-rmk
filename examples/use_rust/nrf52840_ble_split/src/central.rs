@@ -59,10 +59,10 @@ async fn mpsl_task(mpsl: &'static MultiprotocolServiceLayer<'static>) -> ! {
 }
 
 /// How many outgoing L2CAP buffers per link
-const L2CAP_TXQ: u8 = 4;
+const L2CAP_TXQ: u8 = 3;
 
 /// How many incoming L2CAP buffers per link
-const L2CAP_RXQ: u8 = 4;
+const L2CAP_RXQ: u8 = 3;
 
 /// Size of L2CAP packets
 const L2CAP_MTU: usize = 251;
@@ -244,7 +244,7 @@ async fn main(spawner: Spawner) {
         },
         join(keyboard.run(), capslock_led.event_loop()),
         join(
-            run_peripheral_manager::<4, 7, 4, 0, _>(0, peripheral_addrs[0], &stack),
+            run_peripheral_manager::<4, 7, 4, 0, _>(0, &peripheral_addrs, &stack),
             run_rmk(&keymap, driver, &stack, &mut storage, rmk_config),
         ),
     )

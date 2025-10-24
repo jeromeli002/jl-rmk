@@ -79,8 +79,9 @@ pub static ACTIVE_PROFILE: AtomicU8 = AtomicU8::new(0);
 /// - `false`: Indicates central is awake
 pub(crate) static SLEEPING_STATE: AtomicBool = AtomicBool::new(false);
 
+// TODO: Add documentation about how to define split peripheral num in Rust code
 /// Max number of connections
-pub(crate) const CONNECTIONS_MAX: usize = 4; // Should be number of the peripheral + 1?
+pub(crate) const CONNECTIONS_MAX: usize = crate::SPLIT_PERIPHERALS_NUM + 1;
 
 /// Max number of L2CAP channels
 pub(crate) const L2CAP_CHANNELS_MAX: usize = CONNECTIONS_MAX * 4; // Signal + att + smp + hid
@@ -174,7 +175,7 @@ pub(crate) async fn run_ble<
 
     // Create profile manager
     let mut profile_manager = ProfileManager::new(
-        &stack,
+        stack,
         #[cfg(feature = "controller")]
         controller_pub,
     );
@@ -304,7 +305,7 @@ pub(crate) async fn run_ble<
                                 let ble_fut = run_ble_keyboard(
                                     &server,
                                     &conn,
-                                    &stack,
+                                    stack,
                                     #[cfg(feature = "host")]
                                     keymap,
                                     #[cfg(feature = "host")]
@@ -361,7 +362,7 @@ pub(crate) async fn run_ble<
                                     run_ble_keyboard(
                                         &server,
                                         &conn,
-                                        &stack,
+                                        stack,
                                         #[cfg(feature = "host")]
                                         keymap,
                                         #[cfg(feature = "host")]
@@ -459,21 +460,23 @@ pub(crate) async fn ble_task<C: Controller + ControllerCmdAsync<LeSetPhy>, P: Pa
     mut runner: Runner<'_, C, P>,
 ) {
     loop {
-        // Signal to indicate the stack is started
-        #[cfg(feature = "split")]
-        crate::split::ble::central::STACK_STARTED.signal(true);
-
         #[cfg(not(feature = "split"))]
-        if let Err(e) = runner.run().await {
-            panic!("[ble_task] error: {:?}", e);
+        if let Err(_e) = runner.run().await {
+            error!("[ble_task] runner.run() error");
+            embassy_time::Timer::after_millis(100).await;
         }
 
         #[cfg(feature = "split")]
-        if let Err(e) = runner
-            .run_with_handler(&crate::split::ble::central::ScanHandler {})
-            .await
         {
-            panic!("[ble_task] error: {:?}", e);
+            // Signal to indicate the stack is started
+            crate::split::ble::central::STACK_STARTED.signal(true);
+            if let Err(_e) = runner
+                .run_with_handler(&crate::split::ble::central::ScanHandler {})
+                .await
+            {
+                error!("[ble_task] runner.run_with_handler error");
+                embassy_time::Timer::after_millis(100).await;
+            }
         }
     }
 }
@@ -852,38 +855,32 @@ async fn run_ble_keyboard<
     #[cfg(feature = "host")] rmk_config: &'d mut RmkConfig<'static>,
     #[cfg(feature = "storage")] storage: &mut Storage<F, ROW, COL, NUM_LAYER, NUM_ENCODER>,
 ) {
-    let ble_hid_server = BleHidServer::new(&server, &conn);
+    let ble_hid_server = BleHidServer::new(server, conn);
     #[cfg(feature = "host")]
-    let ble_host_server = BleHostServer::new(&server, &conn);
+    let ble_host_server = BleHostServer::new(server, conn);
     let ble_led_reader = BleLedReader {};
-    let mut ble_battery_server = BleBatteryServer::new(&server, &conn);
+    let mut ble_battery_server = BleBatteryServer::new(server, conn);
 
     // Load CCCD table from storage
     #[cfg(feature = "storage")]
     if let Ok(Some(bond_info)) = storage
         .read_trouble_bond_info(ACTIVE_PROFILE.load(Ordering::SeqCst))
         .await
-    {
-        if bond_info.info.identity.match_identity(&conn.raw().peer_identity()) {
+        && bond_info.info.identity.match_identity(&conn.raw().peer_identity()) {
             info!("Loading CCCD table from storage: {:?}", bond_info.cccd_table);
             server.set_cccd_table(conn.raw(), bond_info.cccd_table.clone());
         }
-    }
 
     // Use 2M Phy
     update_ble_phy(stack, conn.raw()).await;
 
     let communication_task = async {
-        match select3(
+        if let Either3::First(e) = select3(
             gatt_events_task(server, conn),
             set_conn_params(stack, conn),
             ble_battery_server.run(),
         )
-        .await
-        {
-            Either3::First(e) => error!("[gatt_events_task] end: {:?}", e),
-            _ => {}
-        }
+        .await { error!("[gatt_events_task] end: {:?}", e) }
     };
 
     run_keyboard(
@@ -943,7 +940,7 @@ pub(crate) async fn update_conn_params<
     params: &ConnectParams,
 ) {
     loop {
-        match conn.update_connection_params(&stack, params).await {
+        match conn.update_connection_params(stack, params).await {
             Err(BleHostError::BleHost(Error::Hci(error))) => {
                 if 0x3A == error.to_status().into_inner() {
                     // Busy, retry
