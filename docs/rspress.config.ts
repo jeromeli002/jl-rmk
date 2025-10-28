@@ -17,7 +17,7 @@ export default defineConfig({
     versions: ['main', ...versions.map((branch) => branch.split('/').pop()!)]
   },
   search: {
-    versioned: true,
+    versioned: true
   },
   globalStyles: path.join(__dirname, 'docs/styles/index.css'),
   themeConfig: {
@@ -26,6 +26,11 @@ export default defineConfig({
         icon: 'github',
         mode: 'link',
         content: 'https://github.com/haobogu/rmk'
+      },
+      {
+        icon: 'discord',
+        mode: 'link',
+        content: 'https://discord.gg/HHGA7pQxkG'
       }
     ]
   }
