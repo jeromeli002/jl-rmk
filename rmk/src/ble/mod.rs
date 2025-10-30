@@ -16,7 +16,6 @@ use {crate::ble::host_service::BleHostServer, crate::keymap::KeyMap, core::cell:
 use {
     crate::channel::{CONTROLLER_CHANNEL, send_controller_event},
     crate::event::ControllerEvent,
-    embassy_time::Instant,
 };
 #[cfg(all(feature = "host", not(feature = "_no_usb")))]
 use {crate::descriptor::ViaReport, crate::host::UsbHostReaderWriter};
@@ -504,20 +503,8 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
 
     CONNECTION_STATE.store(ConnectionState::Connected.into(), Ordering::Release);
     #[cfg(feature = "controller")]
-    let check_connected_time = Instant::now() + Duration::from_secs(2);
-    #[cfg(feature = "controller")]
-    let mut connected_send = false;
-
+    let mut connected = false;
     loop {
-        // Publish the controller connected event after gatt task starts 2 seconds
-        #[cfg(feature = "controller")]
-        if !connected_send && Instant::now() > check_connected_time {
-            connected_send = true;
-            let profile = ACTIVE_PROFILE.load(Ordering::Relaxed);
-            if let Ok(mut publisher) = CONTROLLER_CHANNEL.publisher() {
-                send_controller_event(&mut publisher, ControllerEvent::BleState(profile, BleState::Connected));
-            }
-        }
         match conn.next().await {
             GattConnectionEvent::Disconnected { reason } => {
                 info!("[gatt] disconnected: {:?}", reason);
@@ -525,14 +512,21 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
             }
             GattConnectionEvent::PairingComplete { security_level, bond } => {
                 info!("[gatt] pairing complete: {:?}", security_level);
+                let profile = ACTIVE_PROFILE.load(Ordering::Acquire);
                 if let Some(bond_info) = bond {
                     let profile_info = ProfileInfo {
-                        slot_num: ACTIVE_PROFILE.load(Ordering::SeqCst),
+                        slot_num: profile,
                         info: bond_info,
                         removed: false,
                         cccd_table: server.get_cccd_table(conn.raw()).unwrap(),
                     };
                     UPDATED_PROFILE.signal(profile_info);
+                }
+                // Publish the controller connected event
+                #[cfg(feature = "controller")]
+                if let Ok(mut publisher) = CONTROLLER_CHANNEL.publisher() {
+                    send_controller_event(&mut publisher, ControllerEvent::BleState(profile, BleState::Connected));
+                    connected = true;
                 }
             }
             GattConnectionEvent::PairingFailed(err) => {
@@ -662,12 +656,23 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                 conn_interval,
                 peripheral_latency,
                 supervision_timeout,
-            } => info!(
-                "[gatt] ConnectionParamsUpdated: {:?}ms, {:?}, {:?}ms",
-                conn_interval.as_millis(),
-                peripheral_latency,
-                supervision_timeout.as_millis()
-            ),
+            } => {
+                // Publish the controller connected event
+                #[cfg(feature = "controller")]
+                if !connected {
+                    let profile = ACTIVE_PROFILE.load(Ordering::Acquire);
+                    if let Ok(mut publisher) = CONTROLLER_CHANNEL.publisher() {
+                        send_controller_event(&mut publisher, ControllerEvent::BleState(profile, BleState::Connected));
+                        connected = true;
+                    }
+                }
+                info!(
+                    "[gatt] ConnectionParamsUpdated: {:?}ms, {:?}, {:?}ms",
+                    conn_interval.as_millis(),
+                    peripheral_latency,
+                    supervision_timeout.as_millis()
+                );
+            }
             GattConnectionEvent::RequestConnectionParams {
                 min_connection_interval,
                 max_connection_interval,
