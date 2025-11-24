@@ -1873,6 +1873,7 @@ dependencies = [
 name = "rmk-nrf52840"
 version = "0.2.0"
 dependencies = [
+ "async-trait",
  "bt-hci",
  "const-gen",
  "cortex-m",
