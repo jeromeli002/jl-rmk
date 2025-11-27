@@ -2,14 +2,14 @@
 //!
 //! This module provides keycode definitions following the USB HID
 //! specification, extended with additional codes
-use strum::{EnumIter, FromRepr};
+use strum::FromRepr;
 
 use crate::modifier::ModifierCombination;
 
 /// KeyCode is the internal representation of all keycodes, keyboard operations, etc.
 /// Use flat representation of keycodes.
 #[repr(u16)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr, EnumIter)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(postcard::experimental::max_size::MaxSize)]
 pub enum KeyCode {
@@ -1024,7 +1024,7 @@ impl KeyCode {
         }
     }
 
-    /// Does current keycode continues caps word
+    /// Does current keycode continues Caps Word?
     pub fn is_caps_word_continue_key(self) -> bool {
         if self >= KeyCode::A && self <= KeyCode::Z {
             return true;
@@ -1033,6 +1033,17 @@ impl KeyCode {
             return true;
         }
         if self == KeyCode::Minus || self == KeyCode::Backspace || self == KeyCode::Delete {
+            return true;
+        }
+        false
+    }
+
+    /// Does current keycode is to be shifted by Caps Word?
+    pub fn is_caps_word_shifted_key(self) -> bool {
+        if self >= KeyCode::A && self <= KeyCode::Z {
+            return true;
+        }
+        if self == KeyCode::Minus {
             return true;
         }
         false
@@ -1311,7 +1322,7 @@ impl From<u16> for KeyCode {
 /// Ref: <https://www.usb.org/sites/default/files/documents/hut1_12v2.pdf#page=75>
 #[non_exhaustive]
 #[repr(u16)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr, EnumIter)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ConsumerKey {
     No = 0x00,
@@ -1384,7 +1395,7 @@ impl From<u16> for ConsumerKey {
 /// Ref: <https://www.usb.org/sites/default/files/documents/hut1_12v2.pdf#page=26>
 #[non_exhaustive]
 #[repr(u16)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr, EnumIter)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum SystemControlKey {
     No = 0x00,
