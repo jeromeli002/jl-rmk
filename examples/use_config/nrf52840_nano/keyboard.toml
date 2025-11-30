@@ -26,19 +26,19 @@ matrix_map = """
 [[layer]]
 name = "base_layer"
 keys = """
-Kp1 Kp1 Kp1 Kp1
-Kp1 Kp1 Kp1 Kp1
-Kp1 Kp1 Kp1 Kp1
-Kp1 Kp1 Kp1 Kp1 
+Kc1 Kc2 Kc3 Del
+Kc4 Kc5 Kc6 X
+Kc7 Kc8 Kc9 Kc0
+A   B    C  Enter 
 """
 
 [[layer]]
 name = "second_layer"
 keys = """
-Kp1 Kp1 Kp1 Kp1
-Kp1 Kp1 Kp1 Kp1
-Kp1 Kp1 Kp1 Kp1
-Kp1 Kp1 Kp1 Kp1 
+Kc1 Kc1 Kc1 Kc1
+Kc1 Kc1 Kc1 Kc1
+Kc1 Kc1 Kc1 Kc1
+Kc1 Kc1 Kc1 Kc1 
 """
 
 [aliases]
@@ -53,6 +53,11 @@ battery_adc_pin = "vddh"
 # battery_adc_pin = "P0_04"
 # adc_divider_measured = 2000
 # adc_divider_total = 2806
+
+[storage]
+# Storage feature is enabled by default
+# enabled = false
+# clear_storage = true
 
 [rmk]
 combo_max_num = 128 

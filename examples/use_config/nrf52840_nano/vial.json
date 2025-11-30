@@ -4,8 +4,8 @@
     "productId": "0x4643",
     "lighting": "none",
     "matrix": {
-        "rows": 8,
-        "cols": 10
+        "rows": 4,
+        "cols": 4
     },
     "customKeycodes": [
         {
