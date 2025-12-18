@@ -62,3 +62,4 @@ battery_adc_pin = "vddh"
 [rmk]
 combo_max_num = 128 
 fork_max_num = 16
+macro_space_size = 512
