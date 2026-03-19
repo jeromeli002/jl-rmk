@@ -7,6 +7,7 @@ mod macros;
 mod keymap;
 
 use defmt::{info, unwrap};
+use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_nrf::gpio::{Input, Output};
 use embassy_nrf::interrupt::{self, InterruptExt};
@@ -19,6 +20,7 @@ use embassy_nrf::{Peri, bind_interrupts, rng, usb};
 use nrf_mpsl::Flash;
 use nrf_sdc::mpsl::MultiprotocolServiceLayer;
 use nrf_sdc::{self as sdc, mpsl};
+use panic_probe as _;
 use rand_chacha::ChaCha12Rng;
 use rand_core::SeedableRng;
 use rmk::ble::build_ble_stack;
@@ -40,7 +42,6 @@ use rmk::split::central::run_peripheral_manager;
 use rmk::{HostResources, KeymapData, initialize_keymap_and_storage, run_all, run_rmk};
 use static_cell::StaticCell;
 use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
-use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
     USBD => usb::InterruptHandler<USBD>;
@@ -185,10 +186,7 @@ async fn main(spawner: Spawner) {
 
     // Initialze keyboard stuffs
     // Initialize the storage and keymap
-    let mut keymap_data = KeymapData::new_with_encoder(
-        keymap::get_default_keymap(),
-        keymap::get_default_encoder_map(),
-    );
+    let mut keymap_data = KeymapData::new_with_encoder(keymap::get_default_keymap(), keymap::get_default_encoder_map());
     let mut behavior_config = BehaviorConfig::default();
     behavior_config.morse.enable_flow_tap = true;
     let key_config = PositionalConfig::default();

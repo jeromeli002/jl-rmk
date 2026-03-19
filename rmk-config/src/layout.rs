@@ -15,7 +15,7 @@ const MAX_ALIAS_RESOLUTION_DEPTH: usize = 10;
 
 impl KeyboardTomlConfig {
     /// Layout is a mandatory field in toml, so we mainly check the sizes
-    pub fn get_layout_config(&self) -> Result<(LayoutConfig, Vec<Vec<KeyInfo>>), String> {
+    pub(crate) fn get_layout_config(&self) -> Result<(LayoutConfig, Vec<Vec<KeyInfo>>), String> {
         let aliases = self.aliases.clone().unwrap_or_default();
         let layers = self.layer.clone().unwrap_or_default();
         let mut layout = self.layout.clone().expect("layout config is required");
@@ -569,6 +569,53 @@ mod tests {
             actions,
             vec!["A", "B", "No", "C", "No", "NoUsSlash", "NonUsSlash", "D", "No"]
         );
+    }
+
+    #[test]
+    fn test_keymap_parser_with_comma_alias() {
+        let aliases = HashMap::new();
+        let layer_names = HashMap::new();
+
+        let keymap = "A , SHIFTED(,) B";
+        let result = KeyboardTomlConfig::keymap_parser(keymap, &aliases, &layer_names);
+
+        assert!(result.is_ok());
+        let actions = result.unwrap();
+        assert_eq!(actions, vec!["A", ",", "SHIFTED(,)", "B"]);
+    }
+
+    #[test]
+    fn test_comma_separator_compatibility_in_multi_arg_actions() {
+        let aliases = HashMap::new();
+        let layer_names = HashMap::new();
+
+        // Comma keeps working as argument separator in multi-argument actions.
+        let keymap = "TH(A, B) TH(Comma, B) TH(A, Comma)";
+        let result = KeyboardTomlConfig::keymap_parser(keymap, &aliases, &layer_names);
+
+        assert!(result.is_ok());
+        let actions = result.unwrap();
+        assert_eq!(actions, vec!["TH(A, B)", "TH(Comma, B)", "TH(A, Comma)"]);
+    }
+
+    #[test]
+    fn test_multi_arg_actions_reject_symbol_comma_as_key_argument() {
+        let invalid_cases = ["TH(A, ,)", "TH(, ,)", "WM(, LShift)", "LT(1, ,)", "MT(, LShift)"];
+
+        for input in invalid_cases {
+            let result = ConfigParser::parse(Rule::key_map, input);
+            assert!(result.is_err(), "Input should be rejected: {}", input);
+        }
+    }
+
+    #[test]
+    fn test_single_key_arg_actions_accept_symbol_comma() {
+        let valid_cases = ["SHIFTED(,)", "SHIFTED(Comma)", ","];
+
+        for input in valid_cases {
+            let result = ConfigParser::parse(Rule::key_map, input);
+            assert!(result.is_ok(), "Input should be accepted: {}", input);
+        }
     }
 
     #[test]

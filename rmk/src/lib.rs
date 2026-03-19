@@ -15,8 +15,10 @@
 // Re-export self as ::rmk for macro-generated code to work both inside and outside the crate
 extern crate self as rmk;
 
-// Include generated constants
 include!(concat!(env!("OUT_DIR"), "/constants.rs"));
+
+// TODO: re-export to `constants`?
+pub(crate) use rmk_types::constants::*;
 
 // This mod MUST go first, so that the others see its macros.
 pub(crate) mod fmt;
@@ -33,18 +35,23 @@ use builtin_processor::wpm::WpmProcessor;
 use config::RmkConfig;
 #[cfg(not(feature = "_ble"))]
 use descriptor::{CompositeReport, KeyboardReport};
+pub use embassy_futures;
 #[cfg(not(any(cortex_m)))]
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex as RawMutex;
 #[cfg(cortex_m)]
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex as RawMutex;
 #[cfg(not(feature = "_no_usb"))]
 use embassy_usb::driver::Driver;
+pub use futures;
 use futures::FutureExt;
+pub use heapless;
 use hid::{HidReaderTrait, RunnableHidWriter};
-pub use keymap::KeymapData;
 use keymap::KeyMap;
+pub use keymap::KeymapData;
 use matrix::MatrixTrait;
 use processor::PollingProcessor;
+pub use rmk_macro as macros;
+pub use rmk_types as types;
 #[cfg(all(feature = "storage", feature = "host"))]
 use rmk_types::action::EncoderAction;
 use rmk_types::led_indicator::LedIndicator;
@@ -58,7 +65,6 @@ use {
     crate::light::UsbLedReader,
     crate::usb::{UsbKeyboardWriter, add_usb_reader_writer, add_usb_writer, new_usb_builder},
 };
-pub use {embassy_futures, futures, heapless, rmk_macro as macros, rmk_types as types};
 #[cfg(feature = "storage")]
 use {embedded_storage_async::nor_flash::NorFlash as AsyncNorFlash, storage::Storage};
 
@@ -131,32 +137,19 @@ pub async fn initialize_keymap_and_storage<
     storage_config: &config::StorageConfig,
     behavior_config: &'a mut config::BehaviorConfig,
     positional_config: &'a PositionalConfig<ROW, COL>,
-) -> (
-    KeyMap<'a>,
-    Storage<F, ROW, COL, NUM_LAYER, NUM_ENCODER>,
-) {
+) -> (KeyMap<'a>, Storage<F, ROW, COL, NUM_LAYER, NUM_ENCODER>) {
     #[cfg(feature = "host")]
     {
         let mut storage = {
-            let encoder_opt: Option<&mut [[EncoderAction; NUM_ENCODER]; NUM_LAYER]> =
-                if NUM_ENCODER > 0 { Some(&mut data.encoder_map) } else { None };
-            Storage::new(
-                flash,
-                &data.keymap,
-                &encoder_opt,
-                storage_config,
-                behavior_config,
-            )
-            .await
+            let encoder_opt: Option<&mut [[EncoderAction; NUM_ENCODER]; NUM_LAYER]> = if NUM_ENCODER > 0 {
+                Some(&mut data.encoder_map)
+            } else {
+                None
+            };
+            Storage::new(flash, &data.keymap, &encoder_opt, storage_config, behavior_config).await
         };
 
-        let keymap = KeyMap::new_from_storage(
-            data,
-            Some(&mut storage),
-            behavior_config,
-            positional_config,
-        )
-        .await;
+        let keymap = KeyMap::new_from_storage(data, Some(&mut storage), behavior_config, positional_config).await;
         (keymap, storage)
     }
 
