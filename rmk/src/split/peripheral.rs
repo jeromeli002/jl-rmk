@@ -20,6 +20,8 @@ use crate::CONNECTION_STATE;
 use crate::event::{
     KeyboardEvent, LayerChangeEvent, LedIndicatorEvent, PointingEvent, SubscribableEvent, publish_event,
 };
+#[cfg(feature = "display")]
+use crate::event::{ModifierEvent, SleepStateEvent, WpmUpdateEvent};
 #[cfg(not(feature = "_ble"))]
 use crate::split::serial::SerialSplitDriver;
 use crate::state::ConnectionState;
@@ -32,6 +34,9 @@ use crate::state::ConnectionState;
 /// * `stack` - (optional) The TrouBLE stack
 /// * `serial` - (optional) serial port used to send peripheral split message. This argument is enabled only for serial split now
 /// * `storage` - (optional) The storage to save the central address
+// `'a` is only referenced from the `_ble` cfg-gated parameters; clippy can't
+// see that when `_ble` is off, so silence the unused-lifetime warning.
+#[allow(clippy::extra_unused_lifetimes)]
 pub async fn run_rmk_split_peripheral<
     'a,
     #[cfg(feature = "_ble")] C: Controller + ControllerCmdAsync<LeSetPhy>,
@@ -85,7 +90,7 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
 
         loop {
             let read_message_to_send = async {
-                let message = crate::select_biased_with_feature! {
+                crate::select_biased_with_feature! {
                     e = key_sub.next_message_pure().fuse() => SplitMessage::Key(e),
                     with_feature("_ble"): e = charging_state_sub.next_message_pure().fuse() => {
                         if e.charging {
@@ -96,8 +101,7 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
                     },
                     e = pointing_sub.next_message_pure().fuse() => SplitMessage::Pointing(e),
                     with_feature("_ble"): e = battery_sub.next_event().fuse() => SplitMessage::BatteryState(e),
-                };
-                message
+                }
             };
 
             match select(self.split_driver.read(), read_message_to_send).await {
@@ -127,6 +131,20 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
                         SplitMessage::Layer(layer) => {
                             // Publish Layer event
                             publish_event(LayerChangeEvent { layer });
+                        }
+                        #[cfg(feature = "display")]
+                        SplitMessage::Wpm(wpm) => {
+                            publish_event(WpmUpdateEvent { wpm });
+                        }
+                        #[cfg(feature = "display")]
+                        SplitMessage::Modifier(bits) => {
+                            publish_event(ModifierEvent {
+                                modifier: rmk_types::modifier::ModifierCombination::from_bits(bits),
+                            });
+                        }
+                        #[cfg(feature = "display")]
+                        SplitMessage::SleepState(sleeping) => {
+                            publish_event(SleepStateEvent { sleeping });
                         }
                         _ => (),
                     },

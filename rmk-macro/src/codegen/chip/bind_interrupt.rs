@@ -9,6 +9,7 @@ use rmk_config::resolved::Hardware;
 use rmk_config::resolved::hardware::{BoardConfig, InputDeviceConfig, UniBodyConfig};
 use syn::ItemMod;
 
+use crate::codegen::display::expand_display_interrupt;
 use crate::codegen::feature::{get_rmk_features, is_feature_enabled};
 
 /// Expand `bind_interrupt!` stuffs, and other code before `main` function
@@ -64,6 +65,17 @@ pub(crate) fn bind_interrupt_default(hardware: &Hardware, item_mod: &ItemMod) ->
     let chip = &hardware.chip;
     let board = &hardware.board;
     let communication = &hardware.communication;
+
+    let display_config = match board {
+        BoardConfig::UniBody(_) => hardware.display.as_ref(),
+        BoardConfig::Split(split_config) => split_config.central.display.as_ref(),
+    };
+    let display_interrupt = if let Some(display_config) = display_config {
+        expand_display_interrupt(&chip.series, display_config)
+    } else {
+        quote! {}
+    };
+
     match chip.series {
         rmk_config::resolved::hardware::ChipSeries::Stm32 => {
             // For stm32, bind USB interrupt and EXTI interrupts (if async_matrix is enabled)
@@ -85,6 +97,7 @@ pub(crate) fn bind_interrupt_default(hardware: &Hardware, item_mod: &ItemMod) ->
                     bind_interrupts!(struct Irqs {
                         #interrupt_name => ::embassy_stm32::usb::InterruptHandler<::embassy_stm32::peripherals::#peripheral_name>;
                         #exti_interrupts
+                        #display_interrupt
                         #extern_irqs
                     });
                 }
@@ -93,6 +106,15 @@ pub(crate) fn bind_interrupt_default(hardware: &Hardware, item_mod: &ItemMod) ->
                     use ::embassy_stm32::bind_interrupts;
                     bind_interrupts!(struct Irqs {
                         #exti_interrupts
+                        #display_interrupt
+                        #extern_irqs
+                    });
+                }
+            } else if !display_interrupt.is_empty() {
+                quote! {
+                    use ::embassy_stm32::bind_interrupts;
+                    bind_interrupts!(struct Irqs {
+                        #display_interrupt
                         #extern_irqs
                     });
                 }
@@ -206,6 +228,7 @@ pub(crate) fn bind_interrupt_default(hardware: &Hardware, item_mod: &ItemMod) ->
                     TIMER0 => ::nrf_sdc::mpsl::HighPrioInterruptHandler;
                     RTC0 => ::nrf_sdc::mpsl::HighPrioInterruptHandler;
                     #pmw33xx_spi_interrupts
+                    #display_interrupt
                     #extern_irqs
                 });
 
@@ -262,6 +285,7 @@ pub(crate) fn bind_interrupt_default(hardware: &Hardware, item_mod: &ItemMod) ->
                     #interrupt_name => ::embassy_rp::usb::InterruptHandler<::embassy_rp::peripherals::#peripheral_name>;
                     #dma_irq_0
                     #pio0_irq_0
+                    #display_interrupt
                 });
                 #ble_task
             }
@@ -286,20 +310,20 @@ fn generate_stm32_exti_interrupts(board: &BoardConfig) -> TokenStream2 {
     let mut required_interrupts: HashSet<String> = HashSet::new();
 
     for pin in &row_pins {
-        if let Some(pin_num_str) = get_pin_num_stm32(pin) {
-            if let Ok(pin_num) = pin_num_str.parse::<u8>() {
-                let interrupt_name = match pin_num {
-                    0 => "EXTI0",
-                    1 => "EXTI1",
-                    2 => "EXTI2",
-                    3 => "EXTI3",
-                    4 => "EXTI4",
-                    5..=9 => "EXTI9_5",
-                    10..=15 => "EXTI15_10",
-                    _ => continue,
-                };
-                required_interrupts.insert(interrupt_name.to_string());
-            }
+        if let Some(pin_num_str) = get_pin_num_stm32(pin)
+            && let Ok(pin_num) = pin_num_str.parse::<u8>()
+        {
+            let interrupt_name = match pin_num {
+                0 => "EXTI0",
+                1 => "EXTI1",
+                2 => "EXTI2",
+                3 => "EXTI3",
+                4 => "EXTI4",
+                5..=9 => "EXTI9_5",
+                10..=15 => "EXTI15_10",
+                _ => continue,
+            };
+            required_interrupts.insert(interrupt_name.to_string());
         }
     }
 

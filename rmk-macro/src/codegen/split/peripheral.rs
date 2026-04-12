@@ -11,6 +11,7 @@ use super::central::expand_serial_init;
 use crate::codegen::chip::chip_init::expand_chip_init;
 use crate::codegen::chip::flash::expand_flash_init;
 use crate::codegen::chip::gpio::expand_output_initialization;
+use crate::codegen::display::{expand_display_config, expand_display_interrupt};
 use crate::codegen::entry::join_all_tasks;
 use crate::codegen::feature::{get_rmk_features, is_feature_enabled};
 use crate::codegen::import::expand_custom_imports;
@@ -19,7 +20,9 @@ use crate::codegen::input_device::encoder::expand_encoder_device;
 use crate::codegen::input_device::pmw33xx::expand_pmw33xx_device;
 use crate::codegen::input_device::pmw3610::expand_pmw3610_device;
 use crate::codegen::keyboard_config::read_keyboard_toml_config;
-use crate::codegen::matrix::{expand_matrix_direct_pins, expand_matrix_input_output_pins};
+use crate::codegen::matrix::{
+    expand_bootmagic_check, expand_matrix_direct_pins, expand_matrix_input_output_pins,
+};
 use crate::codegen::orchestrator::get_debouncer_type;
 use crate::codegen::registered_processor::expand_registered_processor_init;
 
@@ -77,6 +80,18 @@ fn expand_bind_interrupt_for_split_peripheral(
     peripheral_id: usize,
 ) -> TokenStream2 {
     let communication = &hardware.communication;
+
+    let display_interrupt = match &hardware.board {
+        BoardConfig::Split(split_config) => {
+            if let Some(display_config) = &split_config.peripheral[peripheral_id].display {
+                expand_display_interrupt(&chip.series, display_config)
+            } else {
+                quote! {}
+            }
+        }
+        _ => quote! {},
+    };
+
     match chip.series {
         ChipSeries::Nrf52 => {
             let ble_config = communication.get_ble_config().unwrap();
@@ -142,6 +157,7 @@ fn expand_bind_interrupt_for_split_peripheral(
                     TIMER0 => ::nrf_sdc::mpsl::HighPrioInterruptHandler;
                     RTC0 => ::nrf_sdc::mpsl::HighPrioInterruptHandler;
                     #pmw33xx_spi_interrupts
+                    #display_interrupt
                 });
 
                 #[::embassy_executor::task]
@@ -184,11 +200,19 @@ fn expand_bind_interrupt_for_split_peripheral(
                     bind_interrupts!(struct Irqs {
                         PIO0_IRQ_0 => ::embassy_rp::pio::InterruptHandler<::embassy_rp::peripherals::PIO0>;
                         DMA_IRQ_0 => ::embassy_rp::dma::InterruptHandler<::embassy_rp::peripherals::DMA_CH0>, ::embassy_rp::dma::InterruptHandler<::embassy_rp::peripherals::DMA_CH1>;
+                        #display_interrupt
                     });
                     #[::embassy_executor::task]
                     async fn cyw43_task(runner: ::cyw43::Runner<'static, ::cyw43::SpiBus<::embassy_rp::gpio::Output<'static>, ::cyw43_pio::PioSpi<'static, ::embassy_rp::peripherals::PIO0, 0>>>) -> ! {
                         runner.run().await
                     }
+                }
+            } else if !display_interrupt.is_empty() {
+                quote! {
+                    use ::embassy_rp::bind_interrupts;
+                    bind_interrupts!(struct Irqs {
+                        #display_interrupt
+                    });
                 }
             } else {
                 quote! {}
@@ -236,6 +260,8 @@ fn expand_split_peripheral(
     let async_matrix = is_feature_enabled(rmk_features, "async_matrix");
     let chip = &hardware.chip;
     let mut matrix_config = proc_macro2::TokenStream::new();
+    let bootmagic = expand_bootmagic_check(&peripheral_config.matrix);
+    let debouncer_type = get_debouncer_type(&peripheral_config.matrix);
     match &peripheral_config.matrix.matrix_type {
         MatrixType::Normal => {
             matrix_config.extend(expand_matrix_input_output_pins(
@@ -253,12 +279,12 @@ fn expand_split_peripheral(
                 peripheral_config.matrix.row2col,
                 async_matrix,
             ));
-            let debouncer_type = get_debouncer_type(&peripheral_config.matrix);
             let col2row = !peripheral_config.matrix.row2col;
             let num_row = peripheral_config.rows;
             let num_col = peripheral_config.cols;
 
             matrix_config.extend(quote! {
+                #bootmagic
                 let debouncer = #debouncer_type::new();
                 let mut matrix = ::rmk::matrix::Matrix::<_, _, _, #num_row, #num_col, #col2row>::new(row_pins, col_pins, debouncer);
             });
@@ -278,9 +304,9 @@ fn expand_split_peripheral(
             // So we need to declaring them in advance.
             let size = row * col;
             let low_active = peripheral_config.matrix.direct_pin_low_active;
-            let debouncer_type = get_debouncer_type(&peripheral_config.matrix);
 
             matrix_config.extend(quote! {
+                #bootmagic
                 let debouncer = #debouncer_type::new();
                 let mut matrix = ::rmk::direct_pin::DirectPinMatrix::<_, _, #row, #col, #size>::new(direct_pins, debouncer, #low_active);
             });
@@ -319,8 +345,22 @@ fn expand_split_peripheral(
     };
 
     // Add processor support for peripherals
-    let (registered_processor_initializers, registered_processors) =
+    let (registered_processor_initializers, mut registered_processors) =
         expand_registered_processor_init(hardware, &item_mod);
+
+    // Display configuration for this peripheral
+    let display_init = if let Some(display_config) = &peripheral_config.display {
+        let (init, processor) = expand_display_config(&chip.series, display_config);
+        let processor_initializer = processor.initializer;
+        let processor_var = processor.var_name;
+        registered_processors.push(quote! { #processor_var.run() });
+        quote! {
+            #init
+            #processor_initializer
+        }
+    } else {
+        quote! {}
+    };
 
     // Import Runnable trait so processor.run() calls compile
     let processor_import = if !registered_processors.is_empty() {
@@ -348,6 +388,7 @@ fn expand_split_peripheral(
         #keymap_init
         #output_config
         #device_initialization
+        #display_init
         #run_rmk_peripheral
     }
 }
