@@ -19,24 +19,43 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
       - run: .github/ci/format.sh
 
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt, llvm-tools
+          targets: thumbv6m-none-eabi,thumbv7m-none-eabi,thumbv7em-none-eabi,thumbv7em-none-eabihf,thumbv8m.main-none-eabihf,riscv32imc-unknown-none-elf,riscv32imac-unknown-none-elf
+      - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-check
+      - name: Install cargo-batch
+        run: cargo install --locked --git https://github.com/embassy-rs/cargo-batch cargo --bin cargo-batch
       - run: .github/ci/check.sh
 
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt, llvm-tools
+          targets: thumbv6m-none-eabi,thumbv7m-none-eabi,thumbv7em-none-eabi,thumbv7em-none-eabihf,thumbv8m.main-none-eabihf,riscv32imc-unknown-none-elf,riscv32imac-unknown-none-elf
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-test
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9
+      - name: Install cargo-expand
+        run: cargo install --locked cargo-expand
       - run: .github/ci/test.sh
 
   # Discover buildable examples for the matrix
@@ -224,7 +243,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-build-esp
+          # Both esp examples share one target dir (see .github/ci/build.sh);
+          # point rust-cache at it so the per-dep artifacts survive between runs.
+          workspaces: |
+            examples/use_config/esp32s3_ble -> ../../../target-esp
+            examples/use_rust/esp32s3_ble -> ../../../target-esp
+      - name: Install espup and esp toolchain
+        run: |
+          cargo install --locked espup
+          espup install
       - run: .github/ci/build.sh

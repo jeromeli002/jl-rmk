@@ -17,6 +17,10 @@
 // Enable std for espidf and test
 #![cfg_attr(not(test), no_std)]
 
+// Mutual exclusivity guard
+#[cfg(all(feature = "rmk_protocol", feature = "vial"))]
+compile_error!("features `rmk_protocol` and `vial` are mutually exclusive");
+
 // Re-export self as ::rmk for macro-generated code to work both inside and outside the crate
 extern crate self as rmk;
 
@@ -115,6 +119,13 @@ pub mod state;
 pub mod storage;
 #[cfg(not(feature = "_no_usb"))]
 pub mod usb;
+
+// Test-only helper that drives `embassy-time/mock-driver` from the
+// `#[cfg(test)]` modules under `src/`. Mirrors the same helper at
+// `tests/common/test_block_on.rs` (which is invisible to lib unit tests
+// because integration tests are a separate compilation target).
+#[cfg(test)]
+pub(crate) mod test_support;
 
 pub async fn initialize_keymap<
     'a,
@@ -299,9 +310,7 @@ pub(crate) async fn run_keyboard<
                 Ok(led_indicator) => {
                     info!("Got led indicator");
                     LOCK_LED_STATES.store(led_indicator.into_bits(), core::sync::atomic::Ordering::Relaxed);
-                    publish_event(LedIndicatorEvent {
-                        indicator: led_indicator,
-                    });
+                    publish_event(LedIndicatorEvent::new(led_indicator));
                 }
                 Err(e) => {
                     debug!("Read HID LED indicator error: {:?}", e);
