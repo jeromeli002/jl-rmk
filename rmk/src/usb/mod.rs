@@ -1,4 +1,4 @@
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_sync::signal::Signal;
 use embassy_sync::watch::{Watch, WatchBehavior};
@@ -16,6 +16,7 @@ use crate::state::ConnectionState;
 use crate::{CONNECTION_STATE, RawMutex};
 
 pub(crate) static USB_REMOTE_WAKEUP: Signal<RawMutex, ()> = Signal::new();
+pub(crate) static USB_SUSPENDED: AtomicBool = AtomicBool::new(false);
 
 /// USB state
 #[repr(u8)]
@@ -43,12 +44,20 @@ impl From<u8> for UsbState {
 pub(crate) struct UsbKeyboardWriter<'a, 'd, D: Driver<'d>> {
     pub(crate) keyboard_writer: &'a mut HidWriter<'d, D, 8>,
     pub(crate) other_writer: &'a mut HidWriter<'d, D, 9>,
+    #[cfg(feature = "steno")]
+    pub(crate) steno_writer: &'a mut HidWriter<'d, D, 9>,
 }
 impl<'a, 'd, D: Driver<'d>> UsbKeyboardWriter<'a, 'd, D> {
-    pub(crate) fn new(keyboard_writer: &'a mut HidWriter<'d, D, 8>, other_writer: &'a mut HidWriter<'d, D, 9>) -> Self {
+    pub(crate) fn new(
+        keyboard_writer: &'a mut HidWriter<'d, D, 8>,
+        other_writer: &'a mut HidWriter<'d, D, 9>,
+        #[cfg(feature = "steno")] steno_writer: &'a mut HidWriter<'d, D, 9>,
+    ) -> Self {
         Self {
             keyboard_writer,
             other_writer,
+            #[cfg(feature = "steno")]
+            steno_writer,
         }
     }
 }
@@ -112,6 +121,28 @@ impl<'d, D: Driver<'d>> HidWriterTrait for UsbKeyboardWriter<'_, 'd, D> {
                     .map_err(HidError::UsbEndpointError)?;
                 Ok(n)
             }
+            #[cfg(feature = "steno")]
+            Report::StenoReport(steno_report) => {
+                // `AsInputReport` for `StenoReport` emits 9 bytes: report id (0x50) + 8 payload bytes.
+                let mut buf: [u8; 9] = [0; 9];
+                let n = steno_report
+                    .serialize(&mut buf)
+                    .map_err(|_| HidError::ReportSerializeError)?;
+                // The USB host only polls the steno IN endpoint when Plover is running.
+                // Without a timeout, write() blocks forever when Plover is absent, which
+                // starves all subsequent keyboard reports and stalls the keyboard.
+                match embassy_time::with_timeout(
+                    embassy_time::Duration::from_millis(5),
+                    self.steno_writer.write(&buf[0..n]),
+                )
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => return Err(HidError::UsbEndpointError(e)),
+                    Err(_) => {} // Plover not reading; drop this report and continue
+                }
+                Ok(n)
+            }
         }
     }
 }
@@ -132,9 +163,10 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(driver: D, keyboard_config: Dev
     usb_config.device_protocol = 0x01;
     usb_config.composite_with_iads = true;
 
-    #[cfg(feature = "usb_log")]
+    // Extra HID interfaces (usb_log, steno) overflow the 128-byte config descriptor buffer.
+    #[cfg(any(feature = "usb_log", feature = "steno"))]
     const USB_BUF_SIZE: usize = 256;
-    #[cfg(not(feature = "usb_log"))]
+    #[cfg(not(any(feature = "usb_log", feature = "steno")))]
     const USB_BUF_SIZE: usize = 128;
 
     // Create embassy-usb DeviceBuilder using the driver and config.
@@ -208,9 +240,14 @@ macro_rules! add_usb_reader_writer {
         $crate::usb::add_usb_reader_writer!($usb_builder, $descriptor, $read_n, $write_n, 64)
     };
     // Size $max_packet to the actual report to conserve Packet Memory Area on tight parts.
-    ($usb_builder:expr, $descriptor:ty, $read_n:expr, $write_n:expr, $max_packet:expr) => {{
-        // Initialize hid reader writer
-        // Current implementation requires the static STATE, so we need to use the paste crate to generate the static variable name.
+    ($usb_builder:expr, $descriptor:ty, $read_n:expr, $write_n:expr, $max_packet:expr) => {
+        $crate::usb::add_usb_reader_writer!(
+            $usb_builder, $descriptor, $read_n, $write_n, $max_packet,
+            ::embassy_usb::class::hid::HidSubclass::No,
+            ::embassy_usb::class::hid::HidBootProtocol::None
+        )
+    };
+    ($usb_builder:expr, $descriptor:ty, $read_n:expr, $write_n:expr, $max_packet:expr, $subclass:expr, $protocol:expr) => {{
         use usbd_hid::descriptor::SerializedDescriptor;
         paste::paste! {
             static [<$descriptor:snake:upper _STATE>]: ::static_cell::StaticCell<::embassy_usb::class::hid::State> = ::static_cell::StaticCell::new();
@@ -225,8 +262,8 @@ macro_rules! add_usb_reader_writer {
             request_handler: Some(request_handler),
             poll_ms: 1,
             max_packet_size: $max_packet,
-            hid_subclass: ::embassy_usb::class::hid::HidSubclass::No,
-            hid_boot_protocol: ::embassy_usb::class::hid::HidBootProtocol::None,
+            hid_subclass: $subclass,
+            hid_boot_protocol: $protocol,
         };
 
         let rw: ::embassy_usb::class::hid::HidReaderWriter<_, $read_n, $write_n> = ::embassy_usb::class::hid::HidReaderWriter::new($usb_builder, state, hid_config);
@@ -290,6 +327,7 @@ impl Handler for UsbDeviceHandler {
     }
 
     fn suspended(&mut self, suspended: bool) {
+        USB_SUSPENDED.store(suspended, Ordering::Release);
         // When no logging feature is enabled, `info!` expands to a no-op and
         // both arms collapse to identical empty blocks — suppress the lint.
         #[allow(clippy::if_same_then_else)]
