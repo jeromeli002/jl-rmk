@@ -16,7 +16,7 @@ use rmk_types::morse::{MorseMode, MorsePattern, TAP};
 use rmk_types::mouse_button::MouseButtons;
 use usbd_hid::descriptor::{MediaKeyboardReport, SystemControlReport};
 
-use crate::channel::KEYBOARD_REPORT_CHANNEL;
+use crate::channel::send_hid_report;
 use crate::config::Hand;
 use crate::core_traits::Runnable;
 #[cfg(all(feature = "split", feature = "_ble"))]
@@ -274,7 +274,7 @@ impl<'a> Keyboard<'a> {
         }
     }
 
-    /// Send a keyboard report to the host
+    /// Send a keyboard report to the host.
     async fn send_report(&self, report: Report) {
         // Do not report keypresses to Host in passkey mode
         #[cfg(feature = "passkey_entry")]
@@ -282,7 +282,7 @@ impl<'a> Keyboard<'a> {
             return;
         }
 
-        KEYBOARD_REPORT_CHANNEL.sender().send(report).await
+        send_hid_report(report).await;
     }
 
     /// Get a copy of the next timeout key in the buffer,
@@ -295,23 +295,6 @@ impl<'a> Keyboard<'a> {
                 KeyState::Released(_) | KeyState::EarlyFired(_) | KeyState::WaitingCombo
             ) || (matches!(k.state, KeyState::Pressed(_)) && k.action.is_morse())
         })
-    }
-
-    // Clean up for leak keys, remove non morse keys in ProcessedButReleaseNotReportedYet state from the buffer
-    pub(crate) fn clean_buffered_processed_keys(&mut self) {
-        self.held_buffer.keys.retain(|k| {
-            if k.action.is_morse() {
-                true
-            } else {
-                match k.state {
-                    KeyState::ProcessedButReleaseNotReportedYet(_) => {
-                        warn!("NEED CLEAN: Processing buffering TAP keys with post tap: {:?}", k.event);
-                        false
-                    }
-                    _ => true,
-                }
-            }
-        });
     }
 
     /// Process the latest buffered key.
@@ -1274,7 +1257,7 @@ impl<'a> Keyboard<'a> {
             #[cfg(feature = "steno")]
             Action::Steno(key) => {
                 if let Some(report) = self.steno.on_event(key, event.pressed) {
-                    crate::keyboard::steno::try_send(report);
+                    crate::channel::try_send_hid_report(report);
                 }
             }
             _ => warn!("Action variant not supported: {:?}", action),
@@ -1580,7 +1563,7 @@ impl<'a> Keyboard<'a> {
             if event.pressed {
                 // Clear Peer is processed when pressed
                 if id == NUM_BLE_PROFILE as u8 + 4 {
-                    #[cfg(all(feature = "split", feature = "_ble"))]
+                    #[cfg(feature = "split")]
                     if event.pressed {
                         // Wait for 5s, if the key is still pressed, clear split peer info
                         // If there's any other key event received during this period, skip
@@ -1592,7 +1575,7 @@ impl<'a> Keyboard<'a> {
                         {
                             Either::First(_) => {
                                 // Timeout reached, send clear peer message
-                                #[cfg(all(feature = "split", feature = "_ble"))]
+                                #[cfg(feature = "split")]
                                 publish_event(ClearPeerEvent);
                                 info!("Clear peer");
                             }
@@ -1606,23 +1589,26 @@ impl<'a> Keyboard<'a> {
                     }
                 }
             } else {
-                // Other user keys are processed when released
+                // Other user keys are processed when released.
+                // Slots 0..NUM_BLE_PROFILE select a profile directly; the next four are
+                // fixed actions stacked on top.
                 if id < NUM_BLE_PROFILE as u8 {
                     info!("Switch to profile: {}", id);
-                    // User0~7: Swtich to the specific profile
-                    BLE_PROFILE_CHANNEL.send(BleProfileAction::SwitchProfile(id)).await;
+                    BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(id)).await;
                 } else if id == NUM_BLE_PROFILE as u8 {
-                    // User8: Next profile
-                    BLE_PROFILE_CHANNEL.send(BleProfileAction::NextProfile).await;
+                    // Next profile
+                    BLE_PROFILE_CHANNEL.send(BleProfileAction::Next).await;
                 } else if id == NUM_BLE_PROFILE as u8 + 1 {
-                    // User9: Previous profile
-                    BLE_PROFILE_CHANNEL.send(BleProfileAction::PreviousProfile).await;
+                    // Previous profile
+                    BLE_PROFILE_CHANNEL.send(BleProfileAction::Previous).await;
                 } else if id == NUM_BLE_PROFILE as u8 + 2 {
-                    // User10: Clear profile
-                    BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearProfile).await;
+                    // Clear bond on current profile
+                    BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond).await;
                 } else if id == NUM_BLE_PROFILE as u8 + 3 {
-                    // User11:
-                    BLE_PROFILE_CHANNEL.send(BleProfileAction::ToggleConnection).await;
+                    // Toggle preferred transport (USB <-> BLE);
+                    // only meaningful when both transports exist in this build.
+                    #[cfg(not(feature = "_no_usb"))]
+                    crate::state::toggle_preferred().await;
                 }
             }
         }
@@ -1902,9 +1888,8 @@ mod test {
     use rmk_types::morse::{MorseMode, MorseProfile};
 
     use super::*;
-    use crate::config::{BehaviorConfig, CombosConfig, ForksConfig, PositionalConfig};
+    use crate::config::{BehaviorConfig, ForksConfig, PositionalConfig};
     use crate::event::{KeyPos, KeyboardEvent, KeyboardEventPos};
-    use crate::keyboard::combo::{Combo, ComboConfig};
     use crate::test_support::test_block_on as block_on;
     use crate::{a, k, layer, mo, th, thp};
 
@@ -1937,19 +1922,6 @@ mod test {
         ]
     }
 
-    #[rustfmt::skip]
-    fn get_combos_config() -> CombosConfig {
-        // Define the function to return the appropriate combo configuration
-        CombosConfig {
-            combos: [
-                Some(Combo::new(ComboConfig::new([k!(V), k!(B)], k!(LShift), Some(0)))),
-                Some(Combo::new(ComboConfig::new([k!(R), k!(T)], k!(LAlt), Some(0)))),
-                None, None, None, None, None, None
-            ],
-            timeout: Duration::from_millis(100),
-        }
-    }
-
     fn create_test_keyboard_with_config(config: BehaviorConfig) -> Keyboard<'static> {
         // Box::leak is acceptable in tests: nextest runs each #[test] in its own process,
         // so the leaked memory is reclaimed when the process exits.
@@ -1979,10 +1951,6 @@ mod test {
             fork: cfg,
             ..BehaviorConfig::default()
         })
-    }
-
-    fn event(row: u8, col: u8, pressed: bool) -> KeyboardEvent {
-        KeyboardEvent::key(row, col, pressed)
     }
 
     #[test]
