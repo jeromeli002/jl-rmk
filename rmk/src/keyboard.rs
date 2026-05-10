@@ -55,6 +55,15 @@ pub(crate) static LAST_KEY_TIMESTAMP: Signal<crate::RawMutex, u32> = Signal::new
 /// LedIndicator type would be nicer, but that does not have const expr constructor
 pub(crate) static LOCK_LED_STATES: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0u8);
 
+/// Read the current host-driven lock LED state as a typed [`LedIndicator`].
+///
+/// Updated by `run_led_reader` whenever the host sends a SET_REPORT for LEDs;
+/// host services read it synchronously instead of subscribing to
+/// [`LedIndicatorEvent`](crate::event::LedIndicatorEvent).
+pub(crate) fn current_led_indicator() -> LedIndicator {
+    LedIndicator::from_bits(LOCK_LED_STATES.load(core::sync::atomic::Ordering::Relaxed))
+}
+
 /// State machine for Caps Word
 #[derive(Debug, Default)]
 enum CapsWordState {
@@ -1027,21 +1036,32 @@ impl<'a> Keyboard<'a> {
                 return (None, true);
             }
         }
+        // Combo idle cooldown: skip combo recording if within idle window
+        // Equivalent to ZMK's require-prior-idle-ms. Key still dispatches normally.
+        let skip_combo = event.pressed
+            && self
+                .keymap
+                .combo_prior_idle_time()
+                .is_some_and(|idle_time| self.last_press_time.elapsed() < idle_time);
 
-        let max_size_of_updated_combo = self.keymap.with_combos_mut(|combos| {
-            combos
-                .iter_mut()
-                .filter_map(|c| c.as_mut())
-                .map(|c| {
-                    if c.update(key_action, event, current_layer) {
-                        info!("Updated combo: {:?}", c);
-                        c.size()
-                    } else {
-                        0
-                    }
-                })
-                .max()
-        });
+        let max_size_of_updated_combo = if skip_combo {
+            None
+        } else {
+            self.keymap.with_combos_mut(|combos| {
+                combos
+                    .iter_mut()
+                    .filter_map(|c| c.as_mut())
+                    .map(|c| {
+                        if c.update(key_action, event, current_layer) {
+                            info!("Updated combo: {:?}", c);
+                            c.size()
+                        } else {
+                            0
+                        }
+                    })
+                    .max()
+            })
+        };
 
         if event.pressed
             && let Some(max_size) = max_size_of_updated_combo
