@@ -58,11 +58,12 @@ display-interface-i2c = { version = "0.5", optional = true }
 
 # Optional dependencies
 # BLE dependencies
-trouble-host = { git = "https://github.com/haobogu/trouble", rev = "e96bdadda8806b1f6257978549746a516f73cf3d", features = [
+trouble-host = { git = "https://github.com/haobogu/trouble", rev = "690373fd1166d16225b875435dd0600c92570e7d", features = [
     "gatt",
     "scan",
     "derive",
     "security",
+    "serde",
 ], optional = true }
 rand_core = { version = "0.6", optional = true }
 bt-hci = { version = "0.8", optional = true }
@@ -105,7 +106,10 @@ features = ["split", "vial", "async_matrix", "_ble"]
 cortex-m = { version = "0.7" }
 
 [features]
-default = ["defmt", "storage", "vial", "vial_lock"]
+default = ["defmt", "storage", "vial", "vial_lock", "watchdog"]
+
+## Enable hardware watchdog support
+watchdog = ["rmk-macro/watchdog"]
 
 ## Enable host configurator support
 host = ["dep:byteorder"]

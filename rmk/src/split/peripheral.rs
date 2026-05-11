@@ -20,9 +20,9 @@ use crate::event::{
 };
 #[cfg(feature = "display")]
 use crate::event::{ModifierEvent, SleepStateEvent, WpmUpdateEvent};
-use crate::split::CENTRAL_HOST_CONNECTED;
 #[cfg(not(feature = "_ble"))]
 use crate::split::serial::SerialSplitDriver;
+use crate::state::update_status;
 
 /// Run the split peripheral service.
 ///
@@ -32,18 +32,19 @@ use crate::split::serial::SerialSplitDriver;
 /// * `stack` - (optional) The TrouBLE stack
 /// * `serial` - (optional) serial port used to send peripheral split message. This argument is enabled only for serial split now
 /// * `storage` - (optional) The storage to save the central address
-// `'a` is only referenced from the `_ble` cfg-gated parameters; clippy can't
-// see that when `_ble` is off, so silence the unused-lifetime warning.
 #[allow(clippy::extra_unused_lifetimes)]
 pub async fn run_rmk_split_peripheral<
-    'a,
+    'b,
+    's,
     #[cfg(feature = "_ble")] C: Controller + ControllerCmdAsync<LeSetPhy>,
     #[cfg(not(feature = "_ble"))] S: Write + Read,
 >(
     #[cfg(feature = "_ble")] id: usize,
-    #[cfg(feature = "_ble")] stack: &'a Stack<'a, C, DefaultPacketPool>,
+    #[cfg(feature = "_ble")] stack: &'b Stack<'s, C, DefaultPacketPool>,
     #[cfg(not(feature = "_ble"))] serial: S,
-) {
+) where
+    's: 'b,
+{
     #[cfg(not(feature = "_ble"))]
     {
         let mut peripheral = SplitPeripheral::new(SerialSplitDriver::new(serial));
@@ -97,9 +98,9 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
                 Either::First(m) => match m {
                     // Process split messages from the central
                     Ok(split_message) => match split_message {
-                        SplitMessage::ConnectionState(state) => {
-                            trace!("Received central host-connection state: {}", state);
-                            CENTRAL_HOST_CONNECTED.store(state, core::sync::atomic::Ordering::Release);
+                        SplitMessage::ConnectionStatus(status) => {
+                            trace!("Received central connection status: {:?}", status);
+                            update_status(|c| *c = status);
                         }
                         #[cfg(all(feature = "_ble", feature = "storage"))]
                         SplitMessage::ClearPeer => {
