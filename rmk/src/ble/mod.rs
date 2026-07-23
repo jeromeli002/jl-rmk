@@ -272,10 +272,9 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
         server.host_service.input_data,
         server.host_service.hid_control_point,
     );
-    let mouse = server.composite_service.mouse_report;
-    let media = server.composite_service.media_report;
-    let media_control_point = server.composite_service.hid_control_point;
-    let system_control = server.composite_service.system_report;
+    let mouse = server.hid_service.mouse_report;
+    let media = server.hid_service.media_report;
+    let system_control = server.hid_service.system_report;
 
     #[cfg(feature = "passkey_entry")]
     let mut passkey_state = PasskeyInputState::new();
@@ -371,10 +370,7 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                             || event.handle() == level.cccd_handle.expect("No CCCD for battery level")
                         {
                             cccd_updated = true;
-                        } else if event.handle() == hid_control_point.handle
-                            || event.handle() == media_control_point.handle
-                            || host_control_point_match
-                        {
+                        } else if event.handle() == hid_control_point.handle || host_control_point_match {
                             info!("Write GATT Event to Control Point: {:?}", event.handle());
                             #[cfg(feature = "split")]
                             {
@@ -608,7 +604,7 @@ pub(crate) async fn set_conn_params<
             max_latency: 30,
             min_event_length: Duration::from_secs(0),
             max_event_length: Duration::from_secs(0),
-            supervision_timeout: Duration::from_secs(5),
+            supervision_timeout: Duration::from_secs(10),
         },
     )
     .await;
@@ -625,7 +621,7 @@ pub(crate) async fn set_conn_params<
             max_latency: 30,
             min_event_length: Duration::from_secs(0),
             max_event_length: Duration::from_secs(0),
-            supervision_timeout: Duration::from_secs(5),
+            supervision_timeout: Duration::from_secs(10),
         },
     )
     .await;
@@ -669,8 +665,12 @@ async fn run_ble_keyboard<
         }
     }
 
-    // Use 2M Phy
-    update_ble_phy(stack, conn.raw()).await;
+    let host_phy = if cfg!(feature = "use_1m_phy") {
+        PhyKind::Le1M
+    } else {
+        PhyKind::Le2M
+    };
+    update_ble_phy(stack, conn.raw(), host_phy).await;
 
     let communication_task = async {
         if let Either3::First(e) = select3(
@@ -704,13 +704,14 @@ async fn run_ble_keyboard<
     select(communication_task, inner).await;
 }
 
-// Update the PHY to 2M
+// Set the connection PHY.
 pub(crate) async fn update_ble_phy<P: PacketPool>(
     stack: &Stack<'_, impl Controller + ControllerCmdAsync<LeSetPhy>, P>,
     conn: &Connection<'_, P>,
+    phy: PhyKind,
 ) {
     loop {
-        match conn.set_phy(stack, PhyKind::Le2M).await {
+        match conn.set_phy(stack, phy).await {
             Err(BleHostError::BleHost(Error::Hci(error))) => {
                 if 0x2A == error.to_status().into_inner() {
                     // Busy, retry
