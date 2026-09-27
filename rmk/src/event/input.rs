@@ -59,8 +59,7 @@ impl KeyboardEvent {
 /// The position of the keyboard event.
 ///
 /// A physical position is a key (row, col) or a rotary encoder (id, direction).
-/// A synthesized position names the behavior whose output the event is, so what
-/// that output registers in the HID report is released under the same identity.
+/// A synthesized position is the source of the keyboard event comes from.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, MaxSize, Eq, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum KeyboardEventPos {
@@ -68,8 +67,10 @@ pub enum KeyboardEventPos {
     RotaryEncoder(RotaryEncoderPos),
     /// Output of the combo at this index.
     Combo(u8),
-    /// Ops of the macro at this index; one macro can hold several keys at once.
+    /// Ops of the macro at this index.
     Macro(u8),
+    /// Virtual position of a keyboard event, indexed by a u8.
+    Virtual(u8),
 }
 
 impl KeyboardEventPos {

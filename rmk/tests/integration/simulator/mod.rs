@@ -627,6 +627,7 @@ fn input(pos: KeyboardEventPos) -> String {
         KeyboardEventPos::RotaryEncoder(pos) => format!("encoder {} {:?}", pos.id, pos.direction),
         KeyboardEventPos::Combo(idx) => format!("combo {idx}"),
         KeyboardEventPos::Macro(idx) => format!("macro {idx}"),
+        KeyboardEventPos::Virtual(idx) => format!("virtual {idx}"),
     }
 }
 

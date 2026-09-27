@@ -207,9 +207,6 @@ pub struct Keyboard<'a> {
     /// Caps Word state machine
     caps_word: CapsWordState,
 
-    /// The modifiers coming from (last) Action::KeyWithModifier
-    with_modifiers: ModifierCombination,
-
     /// Macro text typing state (affects the effective modifiers)
     macro_texting: bool,
     macro_caps: bool,
@@ -218,15 +215,8 @@ pub struct Keyboard<'a> {
     fork_states: [Option<ActiveFork>; FORK_MAX_NUM], // chosen replacement key of the currently triggered forks and the related modifier suppression
     fork_keep_mask: ModifierCombination, // aggregate here the explicit modifiers pressed since the last fork activations
 
-    /// Explicit modifiers and who holds them; the modifier counterpart of `registered_keys`.
-    registered_modifiers: Vec<(KeyboardEventPos, ModifierCombination), 8>,
-
-    /// The held keys for the keyboard hid report, except the modifiers
-    held_keycodes: [HidKeyCode; 6],
-
-    /// Registered key position.
-    /// This is still needed besides `held_keycodes` because multiple keys with same keycode can be registered.
-    registered_keys: [Option<KeyboardEvent>; 6],
+    /// Held actions in press order; the keyboard report is derived from it.
+    registered: Vec<RegisteredKey, 16>,
 
     /// Mouse state (report, acceleration, repeat counters, repeat deadlines)
     mouse: MouseState,
@@ -262,15 +252,12 @@ impl<'a> Keyboard<'a> {
             #[cfg(feature = "_ble")]
             user_hold: None,
             caps_word: CapsWordState::default(),
-            with_modifiers: ModifierCombination::default(),
             macro_texting: false,
             macro_caps: false,
             fork_states: [None; FORK_MAX_NUM],
             fork_keep_mask: ModifierCombination::default(),
             held_buffer: HeldBuffer::new(),
-            registered_keys: [None; 6],
-            registered_modifiers: Vec::new(),
-            held_keycodes: [HidKeyCode::No; 6],
+            registered: Vec::new(),
             mouse: MouseState::new(),
             media_report: MediaKeyboardReport { usage_id: 0 },
             system_control_report: SystemControlReport { usage_id: 0 },
@@ -842,11 +829,6 @@ impl<'a> Keyboard<'a> {
         // Start forks
         let key_action = self.try_start_forks(original_key_action, event);
 
-        // Clear with_modifier if a new key is pressed
-        if self.with_modifiers.into_bits() != 0 && event.pressed {
-            self.with_modifiers = ModifierCombination::new();
-        }
-
         #[cfg(feature = "_ble")]
         LAST_KEY_TIMESTAMP.signal(Instant::now().as_secs() as u32);
 
@@ -900,7 +882,6 @@ impl<'a> Keyboard<'a> {
         };
 
         let fork_states = &self.fork_states;
-        let with_modifiers = &mut self.with_modifiers;
         let fork_keep_mask = &mut self.fork_keep_mask;
         let (replacement, chain_starter, combined_suppress) = self.keymap.with_forks(|forks| {
             let mut triggered_forks = [false; FORK_MAX_NUM]; // used to avoid loops
@@ -923,12 +904,6 @@ impl<'a> Keyboard<'a> {
                         let suppress = fork.match_any.modifiers & !fork.kept_modifiers;
 
                         combined_suppress |= suppress;
-
-                        // Suppress the previously activated Action::KeyWithModifiers
-                        // (even if they held for a long time, a new keypress arrived
-                        // since then, which breaks the key repeat, so losing their
-                        // effect likely will not cause problem...)
-                        *with_modifiers &= !suppress;
 
                         // Reduce the previously aggregated keeps with the match_any mask
                         // (since this is the expected behavior in most cases)
@@ -1237,7 +1212,7 @@ impl<'a> Keyboard<'a> {
         match action {
             Action::No => {}
             Action::Key(key) => match key {
-                KeyCode::Hid(hid) => self.process_action_key(hid, event).await,
+                KeyCode::Hid(hid) => self.process_action_key(hid, ModifierCombination::new(), event).await,
                 // Consumer/system keys with no HID alias are dispatched directly here.
                 KeyCode::Consumer(consumer) => {
                     self.process_action_consumer_control(consumer, event).await;
@@ -1295,9 +1270,9 @@ impl<'a> Keyboard<'a> {
             }
             Action::Modifier(modifiers) => {
                 if event.pressed {
-                    self.register_modifiers(modifiers, event);
+                    self.register_key(HidKeyCode::No, modifiers, event);
                 } else {
-                    self.unregister_modifiers(modifiers, event);
+                    self.unregister_key(HidKeyCode::No, modifiers, event);
                 }
                 //report the modifier press/release in its own hid report
                 self.send_keyboard_report_with_resolved_modifiers(event.pressed).await;
@@ -1309,23 +1284,12 @@ impl<'a> Keyboard<'a> {
                     warn!("Macro trigger queue full, dropped macro {}", macro_idx);
                 }
             }
-            Action::KeyWithModifier(key_code, modifiers) => {
-                if event.pressed {
-                    // These modifiers will be combined into the hid report, so
-                    // they will be "pressed" the same time as the key (in same hid report)
-                    self.with_modifiers |= modifiers;
-                } else {
-                    // The modifiers will not be part of the hid report, so
-                    // they will be "released" the same time as the key (in same hid report)
-                    self.with_modifiers &= !(modifiers);
-                }
-                self.process_action_key(key_code, event).await
-            }
+            Action::KeyWithModifier(key_code, modifiers) => self.process_action_key(key_code, modifiers, event).await,
             Action::LayerOnWithModifier(layer_num, modifiers) => {
                 if event.pressed {
-                    self.register_modifiers(modifiers, event);
+                    self.register_key(HidKeyCode::No, modifiers, event);
                 } else {
-                    self.unregister_modifiers(modifiers, event);
+                    self.unregister_key(HidKeyCode::No, modifiers, event);
                 }
                 self.process_action_layer_switch(layer_num, event);
                 self.send_keyboard_report_with_resolved_modifiers(event.pressed).await
@@ -1415,7 +1379,7 @@ impl<'a> Keyboard<'a> {
     /// - text macro related modifier suppressions + capitalization
     /// - registered (held) modifiers keys
     /// - one-shot modifiers
-    /// - effect of Action::KeyWithModifiers (while they are pressed)
+    /// - the newest held key's own modifiers (Action::KeyWithModifier)
     /// - possible fork related modifier suppressions
     pub fn resolve_modifiers(&mut self, pressed: bool) -> ModifierCombination {
         // Text typing macro should not be affected by any modifiers,
@@ -1445,9 +1409,13 @@ impl<'a> Keyboard<'a> {
         // Execute the remaining suppressions
         result &= !fork_suppress;
 
-        // Apply the modifiers from Action::KeyWithModifiers
-        // the suppression effect of forks should not apply on these
-        result |= self.with_modifiers;
+        // A key's own modifiers decorate it while it is the newest held entry;
+        // a fork's suppression doesn't reach them.
+        if let Some(k) = self.registered.last()
+            && k.keycode != HidKeyCode::No
+        {
+            result |= k.mods;
+        }
 
         // Apply Caps Word shift
         if self.caps_word.is_active() && pressed && self.caps_word.is_shift_current() {
@@ -1458,7 +1426,7 @@ impl<'a> Keyboard<'a> {
     }
 
     // Process a basic keypress/release and also take care of applying one shot modifiers
-    async fn process_hid_keycode(&mut self, key: HidKeyCode, event: KeyboardEvent) {
+    async fn process_hid_keycode(&mut self, key: HidKeyCode, mods: ModifierCombination, event: KeyboardEvent) {
         #[cfg(feature = "passkey_entry")]
         if self.passkey_entry_state.is_active() {
             use crate::ble::passkey::{PASSKEY_RESPONSE, PasskeyAction};
@@ -1484,9 +1452,9 @@ impl<'a> Keyboard<'a> {
         }
 
         if event.pressed {
-            self.register_key(key, event);
+            self.register_key(key, mods, event);
         } else {
-            self.unregister_key(key, event);
+            self.unregister_key(key, mods, event);
         }
 
         self.send_keyboard_report_with_resolved_modifiers(event.pressed).await;
@@ -1501,12 +1469,13 @@ impl<'a> Keyboard<'a> {
                 } else {
                     HidKeyCode::Grave
                 };
-                self.process_hid_keycode(hid_keycode, event).await;
+                self.process_hid_keycode(hid_keycode, ModifierCombination::new(), event)
+                    .await;
             }
             SpecialKey::Repeat => {
                 debug!("Repeat last key code: {:?} , {:?}", self.last_key_code, event);
                 let key = self.last_key_code;
-                self.process_action_key(key, event).await;
+                self.process_action_key(key, ModifierCombination::new(), event).await;
             }
             _ => warn!("SpecialKey variant not supported: {:?}", key),
         };
@@ -1555,7 +1524,7 @@ impl<'a> Keyboard<'a> {
     // Process action key
     /// Universal HID keyboard-key pipeline: `Again` resolution, last-key/caps-word
     /// bookkeeping, dispatch (a `HidKeyCode` may alias to consumer/system/mouse), and one-shot post.
-    async fn process_action_key(&mut self, mut key: HidKeyCode, event: KeyboardEvent) {
+    async fn process_action_key(&mut self, mut key: HidKeyCode, mods: ModifierCombination, event: KeyboardEvent) {
         // Process `Again` key first.
         // Not all platform support `Again` key, so we manually repeat it for users.
         if key == HidKeyCode::Again {
@@ -1594,7 +1563,7 @@ impl<'a> Keyboard<'a> {
             self.process_action_mouse(key, event).await;
             false
         } else {
-            self.process_hid_keycode(key, event).await;
+            self.process_hid_keycode(key, mods, event).await;
             true
         };
 
@@ -1762,20 +1731,20 @@ impl<'a> Keyboard<'a> {
                 match operation {
                     MacroOperation::Press(k) => {
                         self.macro_texting = false;
-                        self.register_key(k, event);
+                        self.register_key(k, ModifierCombination::new(), event);
                         self.send_keyboard_report_with_resolved_modifiers(true).await;
                     }
                     MacroOperation::Release(k) => {
                         self.macro_texting = false;
-                        self.unregister_key(k, event);
+                        self.unregister_key(k, ModifierCombination::new(), event);
                         self.send_keyboard_report_with_resolved_modifiers(false).await;
                     }
                     MacroOperation::Tap(k) => {
                         self.macro_texting = false;
-                        self.register_key(k, event);
+                        self.register_key(k, ModifierCombination::new(), event);
                         self.send_keyboard_report_with_resolved_modifiers(true).await;
                         embassy_time::Timer::after_millis(2).await;
-                        self.unregister_key(k, event);
+                        self.unregister_key(k, ModifierCombination::new(), event);
                         self.send_keyboard_report_with_resolved_modifiers(false).await;
                     }
                     // A macro can't trigger another macro: that would re-enter this queue, and a
@@ -1828,10 +1797,10 @@ impl<'a> Keyboard<'a> {
                             self.send_keyboard_report_with_resolved_modifiers(true).await;
                             embassy_time::Timer::after_millis(12).await;
                         }
-                        self.register_keycode(k, event);
+                        self.register_key(k, ModifierCombination::new(), event);
                         self.send_keyboard_report_with_resolved_modifiers(true).await;
                         embassy_time::Timer::after_millis(12).await;
-                        self.unregister_keycode(k, event);
+                        self.unregister_key(k, ModifierCombination::new(), event);
                         self.send_keyboard_report_with_resolved_modifiers(false).await;
                         if is_cap {
                             self.macro_caps = false;
@@ -1843,19 +1812,12 @@ impl<'a> Keyboard<'a> {
                         embassy_time::Timer::after_millis(t as u64).await;
                     }
                     MacroOperation::End => {
-                        // A press without its release ends with the macro; a physical
-                        // key can't clear it, since it's held under the macro's identity.
+                        // A press without its release ends with the macro: it's held
+                        // under the macro's identity, so no physical key could end it.
                         let mut unpaired = false;
-                        if let Some(&(_, held)) = self.registered_modifiers.iter().find(|(p, _)| *p == event.pos) {
-                            self.unregister_modifiers(held, event);
+                        while let Some(&k) = self.registered.iter().find(|k| k.pos == event.pos) {
+                            self.unregister(k);
                             unpaired = true;
-                        }
-                        for (key, registered) in self.held_keycodes.iter_mut().zip(self.registered_keys.iter_mut()) {
-                            if registered.is_some_and(|e| e.pos == event.pos) {
-                                *key = HidKeyCode::No;
-                                *registered = None;
-                                unpaired = true;
-                            }
                         }
                         // Also restore held modifiers after text typing stops suppressing them.
                         if unpaired || self.macro_texting {
@@ -1886,19 +1848,19 @@ impl<'a> Keyboard<'a> {
     /// releases it.
     pub(crate) fn build_keyboard_report(&mut self, pressed: bool) -> KeyboardReport {
         let modifiers = self.resolve_modifiers(pressed);
-        info!(
-            "Sending keyboard report, modifiers: {:?}, keycodes: {:?}",
-            modifiers, &self.held_keycodes,
-        );
         let mut keycodes = [0u8; 6];
         let mut n = 0;
-        for k in self.held_keycodes {
-            let code = k as u8;
-            if code != 0 && !keycodes[..n].contains(&code) {
+        for k in self.registered.iter().filter(|k| k.keycode != HidKeyCode::No) {
+            let code = k.keycode as u8;
+            if !keycodes[..n].contains(&code) {
                 keycodes[n] = code;
                 n += 1;
             }
         }
+        info!(
+            "Sending keyboard report, modifiers: {:?}, keycodes: {:?}",
+            modifiers, keycodes
+        );
         KeyboardReport {
             modifier: modifiers.into_bits(),
             reserved: 0,
@@ -1938,110 +1900,105 @@ impl<'a> Keyboard<'a> {
         yield_now().await;
     }
 
-    /// Register a key, the key can be a basic keycode or a modifier.
-    fn register_key(&mut self, key: HidKeyCode, event: KeyboardEvent) {
-        if key.is_modifier() {
-            self.register_modifiers(key.to_hid_modifiers(), event);
-        } else {
-            self.register_keycode(key, event);
+    /// Register `key`, a modifier keycode being a modifier action.
+    fn register_key(&mut self, key: HidKeyCode, mods: ModifierCombination, event: KeyboardEvent) {
+        self.register(RegisteredKey::new(event.pos, key, mods));
+    }
+
+    /// Unregister `key`, a modifier keycode being a modifier action.
+    fn unregister_key(&mut self, key: HidKeyCode, mods: ModifierCombination, event: KeyboardEvent) {
+        self.unregister(RegisteredKey::new(event.pos, key, mods));
+    }
+
+    /// Register what a held action contributes to the keyboard report.
+    fn register(&mut self, key: RegisteredKey) {
+        if key.keycode == HidKeyCode::No && key.mods.into_bits() == 0 {
+            return;
+        }
+        // A position holds one action, so a re-press replaces whatever a lost
+        // release left behind; a macro holds one entry per op.
+        if !matches!(key.pos, KeyboardEventPos::Macro(_)) {
+            self.registered.retain(|k| k.pos != key.pos);
+        }
+        // The boot report carries six keycodes; a seventh is dropped.
+        let keys = self.registered.iter().filter(|k| k.keycode != HidKeyCode::No).count();
+        if key.keycode != HidKeyCode::No && keys >= 6 {
+            warn!("Keyboard report full, dropped {:?}", key.keycode);
+        } else if self.registered.push(key).is_err() {
+            warn!("Registered keys full, dropped {:?}", key.keycode);
+        }
+        if key.keycode == HidKeyCode::No {
+            publish_event(ModifierEvent {
+                modifier: self.held_modifiers(),
+            });
+            // if a modifier key arrives after fork activation, it should be kept
+            self.fork_keep_mask |= key.mods;
         }
     }
 
-    /// Unregister a key, the key can be a basic keycode or a modifier.
-    fn unregister_key(&mut self, key: HidKeyCode, event: KeyboardEvent) {
-        if key.is_modifier() {
-            self.unregister_modifiers(key.to_hid_modifiers(), event);
-        } else {
-            self.unregister_keycode(key, event);
-        }
-    }
-
-    /// Register a key to be sent in hid report.
-    fn register_keycode(&mut self, key: HidKeyCode, event: KeyboardEvent) {
-        // A position holds one keycode, so a re-press replaces whatever a lost
-        // release left in its slot. A macro holds one keycode per op instead.
-        let slot = self
-            .registered_keys
+    /// A release ends whatever its position holds; a macro op releases only what it pressed.
+    fn unregister(&mut self, key: RegisteredKey) {
+        let held = self
+            .registered
             .iter()
-            .position(|k| !matches!(event.pos, KeyboardEventPos::Macro(_)) && k.is_some_and(|e| e.pos == event.pos))
-            .or_else(|| self.held_keycodes.iter().position(|&k| k == HidKeyCode::No));
-
-        if let Some(slot) = slot {
-            self.held_keycodes[slot] = key;
-            self.registered_keys[slot] = Some(event);
+            .position(|k| k.pos == key.pos && (!matches!(key.pos, KeyboardEventPos::Macro(_)) || *k == key));
+        if let Some(i) = held
+            && self.registered.remove(i).keycode == HidKeyCode::No
+        {
+            publish_event(ModifierEvent {
+                modifier: self.held_modifiers(),
+            });
         }
     }
 
-    /// Unregister a key from hid report.
-    fn unregister_keycode(&mut self, key: HidKeyCode, event: KeyboardEvent) {
-        // Match pos and keycode: a macro holds several keycodes under one pos.
-        let slot = self
-            .held_keycodes
-            .iter()
-            .zip(&self.registered_keys)
-            .position(|(&k, r)| k == key && r.is_some_and(|e| e.pos == event.pos));
-
-        // A physical release with no slot of its own still clears the keycode from
-        // another physical key. A combo or macro releases only under its own
-        // identity, so nothing else can take a key from it, and it takes none.
-        let slot = slot.or_else(|| {
-            self.held_keycodes
-                .iter()
-                .zip(&self.registered_keys)
-                .position(|(&k, r)| k == key && event.pos.is_physical() && r.is_some_and(|e| e.pos.is_physical()))
-        });
-
-        if let Some(index) = slot {
-            self.held_keycodes[index] = HidKeyCode::No;
-            self.registered_keys[index] = None;
-        }
-    }
-
-    /// Every explicit modifier some holder has down.
+    /// Every modifier some modifier action has down.
     fn held_modifiers(&self) -> ModifierCombination {
-        self.registered_modifiers
+        self.registered
             .iter()
-            .fold(ModifierCombination::new(), |acc, (_, m)| acc | *m)
+            .filter(|k| k.keycode == HidKeyCode::No)
+            .fold(ModifierCombination::new(), |acc, k| acc | k.mods)
     }
 
-    /// Register a modifier combination to be sent in hid report.
-    fn register_modifiers(&mut self, modifiers: ModifierCombination, event: KeyboardEvent) {
-        match self.registered_modifiers.iter_mut().find(|(p, _)| *p == event.pos) {
-            // A macro holds everything its ops pressed; any other holder is one action,
-            // so a re-press replaces whatever a lost release left behind.
-            Some((KeyboardEventPos::Macro(_), held)) => *held |= modifiers,
-            Some((_, held)) => *held = modifiers,
-            None => {
-                if self.registered_modifiers.push((event.pos, modifiers)).is_err() {
-                    warn!("Modifier holders full, dropped {:?}", modifiers);
-                }
-            }
+    /// The keycode slots of the keyboard report, in press order.
+    #[cfg(test)]
+    fn held_keycodes(&self) -> [HidKeyCode; 6] {
+        let mut keys = [HidKeyCode::No; 6];
+        let held = self.registered.iter().filter(|k| k.keycode != HidKeyCode::No);
+        for (slot, k) in keys.iter_mut().zip(held) {
+            *slot = k.keycode;
         }
-
-        publish_event(ModifierEvent {
-            modifier: self.held_modifiers(),
-        });
-
-        // if a modifier key arrives after fork activation, it should be kept
-        self.fork_keep_mask |= modifiers;
+        keys
     }
+}
 
-    /// Unregister a modifier combination from hid report.
-    ///
-    /// Only the holder that registered a modifier releases it: two keys sharing a
-    /// modifier, or a macro and a physical key, each keep it down until their own
-    /// release.
-    fn unregister_modifiers(&mut self, modifiers: ModifierCombination, event: KeyboardEvent) {
-        if let Some(i) = self.registered_modifiers.iter().position(|(p, _)| *p == event.pos) {
-            self.registered_modifiers[i].1 &= !modifiers;
-            if self.registered_modifiers[i].1.into_bits() == 0 {
-                self.registered_modifiers.swap_remove(i);
+/// What one held action contributes to the keyboard report.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RegisteredKey {
+    /// Who holds it, and the identity its release matches on.
+    pos: KeyboardEventPos,
+    /// `No` for a modifier action.
+    keycode: HidKeyCode,
+    /// A modifier action's mods apply while it is held; a key's mods apply while
+    /// it is the newest held entry, so they decorate that key alone.
+    mods: ModifierCombination,
+}
+
+impl RegisteredKey {
+    /// A modifier keycode is a modifier action; anything else is a key with `mods`.
+    fn new(pos: KeyboardEventPos, key: HidKeyCode, mods: ModifierCombination) -> Self {
+        if key.is_modifier() {
+            Self {
+                pos,
+                keycode: HidKeyCode::No,
+                mods: mods | key.to_hid_modifiers(),
+            }
+        } else {
+            Self {
+                pos,
+                keycode: key,
+                mods,
             }
         }
-
-        publish_event(ModifierEvent {
-            modifier: self.held_modifiers(),
-        });
     }
 }
 
@@ -2163,8 +2120,12 @@ mod test {
     fn test_register_key() {
         let main = async {
             let mut keyboard = create_test_keyboard();
-            keyboard.register_key(HidKeyCode::A, KeyboardEvent::key(2, 1, true));
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::A);
+            keyboard.register_key(
+                HidKeyCode::A,
+                ModifierCombination::new(),
+                KeyboardEvent::key(2, 1, true),
+            );
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::A);
         };
         block_on(main);
     }
@@ -2176,11 +2137,11 @@ mod test {
 
             // Press A key
             keyboard.process_inner(KeyboardEvent::key(0, 0, true)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::Grave); // A key's HID code is 0x04
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::Grave); // A key's HID code is 0x04
 
             // Release A key
             keyboard.process_inner(KeyboardEvent::key(0, 0, false)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::No);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
         };
         block_on(main);
     }
@@ -2191,14 +2152,22 @@ mod test {
             let mut keyboard = create_test_keyboard();
 
             // Press Shift key
-            keyboard.register_key(HidKeyCode::LShift, KeyboardEvent::key(3, 0, true));
+            keyboard.register_key(
+                HidKeyCode::LShift,
+                ModifierCombination::new(),
+                KeyboardEvent::key(3, 0, true),
+            );
             assert_eq!(
                 keyboard.held_modifiers(),
                 ModifierCombination::new().with_left_shift(true)
             ); // Left Shift's modifier bit is 0x02
 
             // Release Shift key
-            keyboard.unregister_key(HidKeyCode::LShift, KeyboardEvent::key(3, 0, false));
+            keyboard.unregister_key(
+                HidKeyCode::LShift,
+                ModifierCombination::new(),
+                KeyboardEvent::key(3, 0, false),
+            );
             assert_eq!(keyboard.held_modifiers(), ModifierCombination::new());
         };
         block_on(main);
@@ -2210,23 +2179,23 @@ mod test {
             let mut keyboard = create_test_keyboard();
 
             keyboard.process_inner(KeyboardEvent::key(0, 0, true)).await;
-            assert!(keyboard.held_keycodes.contains(&HidKeyCode::Grave));
+            assert!(keyboard.held_keycodes().contains(&HidKeyCode::Grave));
 
             keyboard.process_inner(KeyboardEvent::key(1, 0, true)).await;
             assert!(
-                keyboard.held_keycodes.contains(&HidKeyCode::Grave)
-                    && keyboard.held_keycodes.contains(&HidKeyCode::Tab)
+                keyboard.held_keycodes().contains(&HidKeyCode::Grave)
+                    && keyboard.held_keycodes().contains(&HidKeyCode::Tab)
             );
 
             keyboard.process_inner(KeyboardEvent::key(1, 0, false)).await;
             assert!(
-                keyboard.held_keycodes.contains(&HidKeyCode::Grave)
-                    && !keyboard.held_keycodes.contains(&HidKeyCode::Tab)
+                keyboard.held_keycodes().contains(&HidKeyCode::Grave)
+                    && !keyboard.held_keycodes().contains(&HidKeyCode::Tab)
             );
 
             keyboard.process_inner(KeyboardEvent::key(0, 0, false)).await;
-            assert!(!keyboard.held_keycodes.contains(&HidKeyCode::Grave));
-            assert!(keyboard.held_keycodes.iter().all(|&k| k == HidKeyCode::No));
+            assert!(!keyboard.held_keycodes().contains(&HidKeyCode::Grave));
+            assert!(keyboard.held_keycodes().iter().all(|&k| k == HidKeyCode::No));
         };
 
         block_on(main);
@@ -2244,31 +2213,31 @@ mod test {
 
             // first press ever of the Again issues KeyCode:No
             keyboard.process_inner(KeyboardEvent::key(0, 0, true)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::No); // A key's HID code is 0x04
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No); // A key's HID code is 0x04
 
             // Press A key
             keyboard.process_inner(KeyboardEvent::key(2, 0, true)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::Escape); // A key's HID code is 0x04
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::Escape); // A key's HID code is 0x04
 
             // Release A key
             keyboard.process_inner(KeyboardEvent::key(2, 0, false)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::No);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
 
             // after another key is pressed, that key is repeated
             keyboard.process_inner(KeyboardEvent::key(0, 0, true)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::Escape); // A key's HID code is 0x04
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::Escape); // A key's HID code is 0x04
 
             // releasing the repeat key
             keyboard.process_inner(KeyboardEvent::key(0, 0, false)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::No); // A key's HID code is 0x04
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No); // A key's HID code is 0x04
 
             // Press S key
             keyboard.process_inner(KeyboardEvent::key(1, 2, true)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::W); // A key's HID code is 0x04
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::W); // A key's HID code is 0x04
 
             // after another key is pressed, that key is repeated
             keyboard.process_inner(KeyboardEvent::key(0, 0, true)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::W); // A key's HID code is 0x04
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::W); // A key's HID code is 0x04
         };
         block_on(main);
     }
@@ -2301,17 +2270,17 @@ mod test {
             // first press ever of the Again issues KeyCode:No
             keyboard.process_inner(KeyboardEvent::key(0, 0, true)).await;
             keyboard.send_keyboard_report_with_resolved_modifiers(true).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::No);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
             // Release F
             keyboard.process_inner(KeyboardEvent::key(0, 0, false)).await;
 
             // Press A key
             keyboard.process_inner(KeyboardEvent::key(2, 1, true)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::A);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::A);
 
             // Release A key
             keyboard.process_inner(KeyboardEvent::key(2, 1, false)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::No);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
 
             // Release F
             keyboard.process_inner(KeyboardEvent::key(0, 0, false)).await;
@@ -2324,19 +2293,19 @@ mod test {
             keyboard.process_inner(KeyboardEvent::key(0, 0, true)).await;
             force_timeout_first_hold(&mut keyboard).await;
 
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::A);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::A);
 
             // releasing the repeat key
             keyboard.process_inner(KeyboardEvent::key(0, 0, false)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::No);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
 
             // Press S key
             keyboard.process_inner(KeyboardEvent::key(2, 2, true)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::S);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::S);
 
             // after another key is pressed, that key is repeated
             keyboard.process_inner(KeyboardEvent::key(0, 0, true)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::S);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::S);
         };
         block_on(main);
     }
@@ -2351,11 +2320,11 @@ mod test {
 
             // Press Transparent key (Q on lower layer)
             keyboard.process_inner(KeyboardEvent::key(1, 1, true)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::Q); // Q key's HID code is 0x14
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::Q); // Q key's HID code is 0x14
 
             // Release Transparent key
             keyboard.process_inner(KeyboardEvent::key(1, 1, false)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::No);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
         };
         block_on(main);
     }
@@ -2367,11 +2336,11 @@ mod test {
 
             // Press No key
             keyboard.process_inner(KeyboardEvent::key(4, 3, true)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::No);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
 
             // Release No key
             keyboard.process_inner(KeyboardEvent::key(4, 3, false)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::No);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
         };
         block_on(main);
     }
@@ -2420,11 +2389,11 @@ mod test {
 
             // Press Dot key, by itself it should emit '.'
             keyboard.process_inner(KeyboardEvent::key(3, 9, true)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::Dot);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::Dot);
 
             // Release Dot key
             keyboard.process_inner(KeyboardEvent::key(3, 9, false)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::No);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
 
             // Press LShift key
             keyboard.process_inner(KeyboardEvent::key(3, 0, true)).await;
@@ -2435,11 +2404,11 @@ mod test {
                 keyboard.resolve_modifiers(true),
                 ModifierCombination::new().with_left_shift(true)
             );
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::Semicolon);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::Semicolon);
 
             //Release Dot key
             keyboard.process_inner(KeyboardEvent::key(3, 9, false)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::No);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
             assert_eq!(
                 keyboard.resolve_modifiers(false),
                 ModifierCombination::new().with_left_shift(true)
@@ -2452,11 +2421,11 @@ mod test {
 
             // Press Comma key, by itself it should emit ','
             keyboard.process_inner(KeyboardEvent::key(3, 8, true)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::Comma);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::Comma);
 
             // Release Dot key
             keyboard.process_inner(KeyboardEvent::key(3, 8, false)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::No);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
 
             // Press LShift key
             keyboard.process_inner(KeyboardEvent::key(3, 0, true)).await;
@@ -2464,11 +2433,11 @@ mod test {
             // Press Comma key, with shift it should emit ';' (shift is suppressed)
             keyboard.process_inner(KeyboardEvent::key(3, 8, true)).await;
             assert_eq!(keyboard.resolve_modifiers(true), ModifierCombination::new());
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::Semicolon);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::Semicolon);
 
             // Release Comma key, shift is still held
             keyboard.process_inner(KeyboardEvent::key(3, 8, false)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::No);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
             assert_eq!(
                 keyboard.resolve_modifiers(false),
                 ModifierCombination::new().with_left_shift(true)
@@ -2532,12 +2501,12 @@ mod test {
 
             // Press Z key, by itself it should emit 'MouseBtn5'
             keyboard.process_inner(KeyboardEvent::key(3, 1, true)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::No);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
             assert_eq!(keyboard.mouse.report.buttons, 1u8 << 4); // MouseBtn5
 
             // Release Z key
             keyboard.process_inner(KeyboardEvent::key(3, 1, false)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::No);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
             assert_eq!(keyboard.mouse.report.buttons, 0);
 
             // Press LCtrl key
@@ -2555,12 +2524,12 @@ mod test {
                 keyboard.resolve_modifiers(true),
                 ModifierCombination::new().with_left_shift(true)
             );
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::C);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::C);
             assert_eq!(keyboard.mouse.report.buttons, 0);
 
             // Release 'Z' key, suppression of ctrl is removed
             keyboard.process_inner(KeyboardEvent::key(3, 1, false)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::No);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
             assert_eq!(
                 keyboard.resolve_modifiers(false),
                 ModifierCombination::new().with_left_ctrl(true).with_left_shift(true)
@@ -2579,11 +2548,11 @@ mod test {
 
             // Press 'A' key, by itself it should emit 'S'
             keyboard.process_inner(KeyboardEvent::key(2, 1, true)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::S);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::S);
 
             // Release 'A' key
             keyboard.process_inner(KeyboardEvent::key(2, 1, false)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::No);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
             assert_eq!(keyboard.resolve_modifiers(false), ModifierCombination::new());
             assert_eq!(keyboard.mouse.report.buttons, 0);
 
@@ -2592,20 +2561,20 @@ mod test {
 
             // Press Z key, by itself it should emit 'MouseBtn5'
             keyboard.process_inner(KeyboardEvent::key(3, 1, true)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::No);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
             assert_eq!(keyboard.mouse.report.buttons, 1u8 << 4); // MouseBtn5 //this fails, but ok in debug - why?
 
             // Press 'A' key, with 'MouseBtn5' it should emit 'D'
             keyboard.process_inner(KeyboardEvent::key(2, 1, true)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::D);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::D);
 
             // Release Z (MouseBtn1) key, 'D' is still held
             keyboard.process_inner(KeyboardEvent::key(3, 1, false)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::D);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::D);
 
             // Release 'A' key -> releases 'D'
             keyboard.process_inner(KeyboardEvent::key(2, 1, false)).await;
-            assert_eq!(keyboard.held_keycodes[0], HidKeyCode::No);
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
         };
 
         block_on(main);
