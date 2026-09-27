@@ -1022,18 +1022,14 @@ impl<'a> Keyboard<'a> {
             combos
                 .iter_mut()
                 .enumerate()
-                .filter_map(|(i, c)| c.as_mut().map(|c| (i, c)))
                 .filter_map(|(i, c)| {
-                    if c.is_all_pressed() && !c.is_triggered() {
-                        // When a key is pressed (interrupting a combo wait), trigger any delayed combo.
-                        // When releasing a key, only trigger combos that contain the key_action.
-                        if event.pressed || c.config.contains(key_action) {
-                            // All keys are pressed but the combo is not triggered, trigger it
-                            return Some((c.size(), i, c));
-                        }
-                    }
-                    None
-                }) // Find all delayed combos
+                    let c = c.as_mut()?;
+                    // When a key is pressed (interrupting a combo wait), trigger any delayed combo.
+                    // When releasing a key, only trigger combos that contain the key_action.
+                    let delayed =
+                        c.is_all_pressed() && !c.is_triggered() && (event.pressed || c.config.contains(key_action));
+                    delayed.then_some((c.size(), i, c))
+                })
                 .max_by_key(|x| x.0) // Find only the longest one
                 .map(|(_, i, c)| (i, c.trigger(), c.config.actions.clone())) // Trigger it and get the actions
         });
@@ -1157,17 +1153,11 @@ impl<'a> Keyboard<'a> {
 
             // Only one combo is updated, and triggered
             let triggered = self.keymap.with_combos_mut(|combos| {
-                combos
-                    .iter_mut()
-                    .enumerate()
-                    .filter_map(|(i, c)| c.as_mut().map(|c| (i, c)))
-                    .find_map(|(i, c)| {
-                        if c.is_all_pressed() && !c.is_triggered() && c.size() == max_size {
-                            Some((i, c.trigger(), c.config.actions.clone()))
-                        } else {
-                            None
-                        }
-                    })
+                combos.iter_mut().enumerate().find_map(|(i, c)| {
+                    let c = c.as_mut()?;
+                    (c.is_all_pressed() && !c.is_triggered() && c.size() == max_size)
+                        .then(|| (i, c.trigger(), c.config.actions.clone()))
+                })
             });
 
             if let Some((idx, next_action, triggered_actions)) = triggered {
@@ -1196,11 +1186,8 @@ impl<'a> Keyboard<'a> {
                 let mut releasing_triggered_combo = false;
 
                 self.keymap.with_combos_mut(|combos| {
-                    for (i, combo) in combos
-                        .iter_mut()
-                        .enumerate()
-                        .filter_map(|(i, c)| c.as_mut().map(|c| (i, c)))
-                    {
+                    for (i, combo) in combos.iter_mut().enumerate() {
+                        let Some(combo) = combo else { continue };
                         if combo.config.contains(key_action) {
                             // Releasing a combo key in triggered combo
                             releasing_triggered_combo |= combo.is_triggered();
