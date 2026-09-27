@@ -406,11 +406,7 @@ impl<'a> Keyboard<'a> {
         // Process key
         let key_action = &self.keymap.get_action_with_layer_cache(event);
 
-        if self.combo_on {
-            if let Some((key_action, event)) = self.process_combo(key_action, event, event_time).await {
-                self.process_key_action(&key_action, event, event_time).await
-            }
-        } else {
+        if !self.combo_on || self.process_combo(key_action, event, event_time).await {
             self.process_key_action(key_action, event, event_time).await
         }
     }
@@ -1034,26 +1030,21 @@ impl<'a> Keyboard<'a> {
                 .map(|(_, i, c)| (i, c.trigger(), c.config.actions.clone())) // Trigger it and get the actions
         });
 
-        // Clean the held buffer, process the combo output action and clear other combos
-        if let Some((idx, action, combo_actions)) = triggered_combo {
-            // Only remove keys that are part of the triggered combo from the held buffer
-            self.held_buffer.keys.retain(|item| {
-                if item.state != KeyState::WaitingCombo {
-                    return true;
-                }
-                // Check if this key is part of the triggered combo
-                !combo_actions.contains(&item.action)
-            });
-
-            let output_event = KeyboardEvent {
-                pos: KeyboardEventPos::Combo(idx as u8),
-                pressed: true,
-            };
-            self.process_key_action(&action, output_event, Instant::now()).await;
-            debug!("[Combo] {:?} triggered", action);
-            // Reset other combos shadowed by the one that just fired.
-            self.reset_shadowed_combos(&combo_actions);
+        if let Some((idx, output, chord)) = triggered_combo {
+            self.fire_combo(idx, output, &chord, Instant::now()).await;
         }
+    }
+
+    /// Fire combo `idx`: drop its chord keys from the held buffer, reset the combos
+    /// it shadows, and dispatch `output` under the combo's own position.
+    async fn fire_combo(&mut self, idx: usize, output: KeyAction, chord: &[KeyAction], at: Instant) {
+        debug!("[Combo] {:?} triggered", output);
+        self.held_buffer
+            .keys
+            .retain(|item| item.state != KeyState::WaitingCombo || !chord.contains(&item.action));
+        self.reset_shadowed_combos(chord);
+        self.process_key_action(&output, KeyboardEvent::combo(idx as u8, true), at)
+            .await;
     }
 
     // Reset combos shadowed by a just-triggered combo: any *other* combo that is
@@ -1075,15 +1066,9 @@ impl<'a> Keyboard<'a> {
 
     /// Check combo before process keys.
     ///
-    /// Returns the action to dispatch and the event to dispatch it under: the key
-    /// itself, or a combo output under the combo's own position. `None` means the
-    /// event was consumed here.
-    async fn process_combo(
-        &mut self,
-        key_action: &KeyAction,
-        event: KeyboardEvent,
-        event_time: Instant,
-    ) -> Option<(KeyAction, KeyboardEvent)> {
+    /// Returns whether the key still needs normal processing: `false` once a combo
+    /// buffered it, fired in its place, or consumed its release.
+    async fn process_combo(&mut self, key_action: &KeyAction, event: KeyboardEvent, event_time: Instant) -> bool {
         let current_layer = self.keymap.get_activated_layer();
 
         // First, when releasing a key, check whether there's untriggered combo, if so, triggerer it first
@@ -1108,7 +1093,7 @@ impl<'a> Keyboard<'a> {
             });
             if reasserted {
                 debug!("[Combo] re-press of triggered-combo key swallowed: {:?}", key_action);
-                return None;
+                return false;
             }
         }
         // Combo idle cooldown: skip combo recording if within idle window
@@ -1160,19 +1145,10 @@ impl<'a> Keyboard<'a> {
                 })
             });
 
-            if let Some((idx, next_action, triggered_actions)) = triggered {
-                debug!("[Combo] {:?} triggered", next_action);
-                self.held_buffer
-                    .keys
-                    .retain(|item| item.state != KeyState::WaitingCombo || !triggered_actions.contains(&item.action));
-                self.reset_shadowed_combos(&triggered_actions);
-                let output_event = KeyboardEvent {
-                    pos: KeyboardEventPos::Combo(idx as u8),
-                    pressed: true,
-                };
-                return Some((next_action, output_event));
+            if let Some((idx, output, chord)) = triggered {
+                self.fire_combo(idx, output, &chord, event_time).await;
             }
-            None
+            false
         } else {
             // No combo is updated, dispatch combos
             if !event.pressed {
@@ -1202,26 +1178,21 @@ impl<'a> Keyboard<'a> {
                     }
                 });
 
-                // Releasing a triggered combo:
-                // - Dispatch every combo output whose combo fully unwound, in iteration
-                //   order. Returning `None` tells the caller not to dispatch again.
-                // - Return `None` on a partial release too (combo output still held),
-                //   which consumes the release event without sending anything.
+                // Releasing a triggered combo: release every combo output whose combo
+                // fully unwound, in iteration order. A partial release (combo output
+                // still held) consumes the event without sending anything.
                 if releasing_triggered_combo {
                     for (idx, output) in &combo_outputs {
-                        let output_event = KeyboardEvent {
-                            pos: KeyboardEventPos::Combo(*idx),
-                            pressed: false,
-                        };
-                        self.process_key_action(output, output_event, event_time).await;
+                        self.process_key_action(output, KeyboardEvent::combo(*idx, false), event_time)
+                            .await;
                     }
-                    return None;
+                    return false;
                 }
             }
 
             // When no key is updated(the combo is interruptted), or a key is released,
             self.dispatch_combos(key_action, event).await;
-            Some((*key_action, event))
+            true
         }
     }
 
@@ -2004,27 +1975,20 @@ impl<'a> Keyboard<'a> {
     /// Unregister a key from hid report.
     fn unregister_keycode(&mut self, key: HidKeyCode, event: KeyboardEvent) {
         // Match pos and keycode: a macro holds several keycodes under one pos.
-        let slot = self.registered_keys.iter().enumerate().find_map(|(i, k)| {
-            if let Some(e) = k
-                && event.pos == e.pos
-                && self.held_keycodes[i] == key
-            {
-                return Some(i);
-            }
-            None
-        });
+        let slot = self
+            .held_keycodes
+            .iter()
+            .zip(&self.registered_keys)
+            .position(|(&k, r)| k == key && r.is_some_and(|e| e.pos == event.pos));
 
         // A physical release with no slot of its own still clears the keycode from
-        // another physical key. A combo or macro output releases only under its own
+        // another physical key. A combo or macro releases only under its own
         // identity, so nothing else can take a key from it, and it takes none.
         let slot = slot.or_else(|| {
-            if !event.pos.is_physical() {
-                return None;
-            }
             self.held_keycodes
                 .iter()
-                .enumerate()
-                .position(|(i, &k)| k == key && self.registered_keys[i].is_some_and(|e| e.pos.is_physical()))
+                .zip(&self.registered_keys)
+                .position(|(&k, r)| k == key && event.pos.is_physical() && r.is_some_and(|e| e.pos.is_physical()))
         });
 
         if let Some(index) = slot {

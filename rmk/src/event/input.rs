@@ -47,6 +47,13 @@ impl KeyboardEvent {
             pos: KeyboardEventPos::RotaryEncoder(RotaryEncoderPos { id, direction }),
         }
     }
+
+    pub(crate) fn combo(idx: u8, pressed: bool) -> Self {
+        Self {
+            pressed,
+            pos: KeyboardEventPos::Combo(idx),
+        }
+    }
 }
 
 /// The position of the keyboard event.
