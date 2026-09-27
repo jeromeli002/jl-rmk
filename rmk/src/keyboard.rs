@@ -988,36 +988,38 @@ impl<'a> Keyboard<'a> {
     /// - `event`: The keyboard event. When pressing (interrupting), trigger any delayed combo.
     ///   When releasing, only trigger combos that contain the key_action.
     async fn trigger_delayed_combo(&mut self, key_action: &KeyAction, event: KeyboardEvent) {
-        // First, find the delayed combo and trigger it
-        let triggered_combo = self.keymap.with_combos_mut(|combos| {
+        // The longest pending combo this event may fire: any on a press (it
+        // interrupts the combo wait), only one containing the key on a release.
+        let delayed = self.keymap.with_combos(|combos| {
             combos
-                .iter_mut()
+                .iter()
                 .enumerate()
                 .filter_map(|(i, c)| {
-                    let c = c.as_mut()?;
-                    // When a key is pressed (interrupting a combo wait), trigger any delayed combo.
-                    // When releasing a key, only trigger combos that contain the key_action.
-                    let delayed =
-                        c.is_all_pressed() && !c.is_triggered() && (event.pressed || c.config.contains(key_action));
-                    delayed.then_some((c.size(), i, c))
+                    let c = c.as_ref()?;
+                    (c.is_pending() && (event.pressed || c.config.contains(key_action))).then_some((c.size(), i))
                 })
-                .max_by_key(|x| x.0) // Find only the longest one
-                .map(|(_, i, c)| (i, c.trigger(), c.config.actions.clone())) // Trigger it and get the actions
+                .max_by_key(|&(size, _)| size)
+                .map(|(_, i)| i)
         });
-
-        if let Some((idx, output, chord)) = triggered_combo {
-            self.fire_combo(idx, output, &chord, Instant::now()).await;
+        if let Some(idx) = delayed {
+            self.fire_combo(idx, Instant::now()).await;
         }
     }
 
     /// Fire combo `idx`: drop its chord keys from the held buffer, reset the combos
-    /// it shadows, and dispatch `output` under the combo's own position.
-    async fn fire_combo(&mut self, idx: usize, output: KeyAction, chord: &[KeyAction], at: Instant) {
+    /// it shadows, and dispatch its output under the combo's own position.
+    async fn fire_combo(&mut self, idx: usize, at: Instant) {
+        let Some((output, chord)) = self
+            .keymap
+            .with_combos_mut(|combos| combos[idx].as_mut().map(|c| (c.trigger(), c.config.actions.clone())))
+        else {
+            return;
+        };
         debug!("[Combo] {:?} triggered", output);
         self.held_buffer
             .keys
             .retain(|item| item.state != KeyState::WaitingCombo || !chord.contains(&item.action));
-        self.reset_shadowed_combos(chord);
+        self.reset_shadowed_combos(&chord);
         self.process_key_action(&output, KeyboardEvent::combo(idx as u8, true), at)
             .await;
     }
@@ -1028,10 +1030,7 @@ impl<'a> Keyboard<'a> {
     fn reset_shadowed_combos(&mut self, triggered_actions: &[KeyAction]) {
         self.keymap.with_combos_mut(|combos| {
             combos.iter_mut().filter_map(|c| c.as_mut()).for_each(|c| {
-                if c.is_all_pressed()
-                    && !c.is_triggered()
-                    && c.config.actions.iter().any(|a| triggered_actions.contains(a))
-                {
+                if c.is_pending() && c.config.actions.iter().any(|a| triggered_actions.contains(a)) {
                     info!("Resetting shadowed combo: {:?}", c,);
                     c.reset();
                 }
@@ -1112,16 +1111,13 @@ impl<'a> Keyboard<'a> {
             ));
 
             // Only one combo is updated, and triggered
-            let triggered = self.keymap.with_combos_mut(|combos| {
-                combos.iter_mut().enumerate().find_map(|(i, c)| {
-                    let c = c.as_mut()?;
-                    (c.is_all_pressed() && !c.is_triggered() && c.size() == max_size)
-                        .then(|| (i, c.trigger(), c.config.actions.clone()))
-                })
+            let triggered = self.keymap.with_combos(|combos| {
+                combos
+                    .iter()
+                    .position(|c| c.as_ref().is_some_and(|c| c.is_pending() && c.size() == max_size))
             });
-
-            if let Some((idx, output, chord)) = triggered {
-                self.fire_combo(idx, output, &chord, event_time).await;
+            if let Some(idx) = triggered {
+                self.fire_combo(idx, event_time).await;
             }
             false
         } else {
