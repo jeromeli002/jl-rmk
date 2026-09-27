@@ -538,7 +538,11 @@ impl<'a> Keyboard<'a> {
                 }
                 HeldKeyDecision::PermissiveHold | HeldKeyDecision::HoldOnOtherKeyPress => {
                     if let Some(mut held_key) = self.held_buffer.remove_if(|k| k.event.pos == pos) {
-                        let action = self.keymap.get_action_with_layer_cache(held_key.event);
+                        let action = if held_key.event.pos.is_physical() {
+                            self.keymap.get_action_with_layer_cache(held_key.event)
+                        } else {
+                            held_key.action
+                        };
 
                         if action.is_morse() {
                             // Permissive hold of held key is triggered
@@ -578,10 +582,14 @@ impl<'a> Keyboard<'a> {
                     // Releasing the current key, will always be tapping, because timeout isn't here
                     let mut resolved = false;
                     if let Some(mut held_key) = self.held_buffer.remove_if(|k| k.event.pos == pos) {
-                        // Always re-evaluate action based on current layer state.
+                        // Always re-evaluate a physical key based on current layer state.
                         // A prior layer change (e.g. permissive hold activating a layer)
                         // may have changed what action this key maps to.
-                        let key_action = self.keymap.get_action_with_layer_cache(held_key.event);
+                        let key_action = if held_key.event.pos.is_physical() {
+                            self.keymap.get_action_with_layer_cache(held_key.event)
+                        } else {
+                            held_key.action
+                        };
                         if key_action != held_key.action {
                             keyboard_state_updated = true;
                         }
@@ -650,7 +658,7 @@ impl<'a> Keyboard<'a> {
 
                     if trigger_normal && let Some(held_key) = self.held_buffer.remove_if(|k| k.event.pos == pos) {
                         debug!("Cleaning buffered normal key");
-                        let action = if keyboard_state_updated {
+                        let action = if keyboard_state_updated && held_key.event.pos.is_physical() {
                             self.keymap.get_action_with_layer_cache(held_key.event)
                         } else {
                             held_key.action
@@ -1543,20 +1551,27 @@ impl<'a> Keyboard<'a> {
             self.caps_word.check(key);
         }
 
-        // Dispatch to the right HID report; only the plain-keyboard branch is "basic".
-        let is_basic_keyboard_key = if let Some(consumer) = key.process_as_consumer() {
+        // `WM` modifiers on a consumer, system or mouse key can't ride in that key's
+        // report, so they are a modifier action at this position, held around the key.
+        let is_basic_keyboard_key = key.is_keyboard_key();
+        let hold_mods = !is_basic_keyboard_key && mods.into_bits() != 0;
+        if hold_mods && event.pressed {
+            self.register_key(HidKeyCode::No, mods, event);
+            self.send_keyboard_report_with_resolved_modifiers(true).await;
+        }
+        if let Some(consumer) = key.process_as_consumer() {
             self.process_action_consumer_control(consumer, event).await;
-            false
         } else if let Some(system_control) = key.process_as_system_control() {
             self.process_action_system_control(system_control, event).await;
-            false
         } else if key.is_mouse_key() {
             self.process_action_mouse(key, event).await;
-            false
         } else {
             self.process_hid_keycode(key, mods, event).await;
-            true
-        };
+        }
+        if hold_mods && !event.pressed {
+            self.unregister_key(HidKeyCode::No, mods, event);
+            self.send_keyboard_report_with_resolved_modifiers(false).await;
+        }
 
         // Consume any pending one-shot; on quick-release of a basic key, re-send the report.
         let quick_release = self.keymap.one_shot_modifiers_config().quick_release;
@@ -1709,7 +1724,7 @@ impl<'a> Keyboard<'a> {
     async fn execute_macro(&mut self, macro_idx: u8) {
         // Every op registers under the macro's own identity, never the trigger key's.
         let event = KeyboardEvent {
-            pos: KeyboardEventPos::Macro(macro_idx),
+            pos: KeyboardEventPos::Macro,
             pressed: true,
         };
         let release = KeyboardEvent {
@@ -1890,14 +1905,16 @@ impl<'a> Keyboard<'a> {
 
     /// Register a pressed key.
     fn register_key(&mut self, key: HidKeyCode, mods: ModifierCombination, event: KeyboardEvent) {
+        if key == HidKeyCode::No && mods.into_bits() == 0 {
+            return;
+        }
         let key = RegisteredKey::new(event.pos, key, mods);
-        let before = self.held_modifiers();
         // A press repeated without a release (a lost release, or a macro pressing a
         // key twice) replaces the old entry.
         self.registered.retain(|k| !k.matches(&key));
         // The boot report has six keycode slots.
         let keys = self.registered.iter().filter(|k| k.keycode != HidKeyCode::No).count();
-        if key.keycode != HidKeyCode::No && keys >= 6 || self.registered.is_full() {
+        if (key.keycode != HidKeyCode::No && keys >= 6) || self.registered.is_full() {
             warn!("Keyboard report full, dropped {:?}", key.keycode);
         } else {
             // `KeyWithModifier` modifiers apply only until the next press.
@@ -1905,24 +1922,21 @@ impl<'a> Keyboard<'a> {
                 k.mods = ModifierCombination::new();
             }
             let _ = self.registered.push(key);
-            // A modifier pressed after a fork fired is not suppressed by it.
             if key.keycode == HidKeyCode::No {
+                // A modifier pressed after a fork fired is not suppressed by it.
                 self.fork_keep_mask |= key.mods;
+                publish_event(ModifierEvent {
+                    modifier: self.held_modifiers(),
+                });
             }
-        }
-        if self.held_modifiers() != before {
-            publish_event(ModifierEvent {
-                modifier: self.held_modifiers(),
-            });
         }
     }
 
     /// Unregister a released key.
     fn unregister_key(&mut self, key: HidKeyCode, mods: ModifierCombination, event: KeyboardEvent) {
         let key = RegisteredKey::new(event.pos, key, mods);
-        let before = self.held_modifiers();
         self.registered.retain(|k| !k.matches(&key));
-        if self.held_modifiers() != before {
+        if key.keycode == HidKeyCode::No {
             publish_event(ModifierEvent {
                 modifier: self.held_modifiers(),
             });
@@ -1962,18 +1976,10 @@ struct RegisteredKey {
 impl RegisteredKey {
     /// A modifier keycode counts as a modifier action.
     fn new(pos: KeyboardEventPos, key: HidKeyCode, mods: ModifierCombination) -> Self {
-        if key.is_modifier() {
-            Self {
-                pos: pos,
-                keycode: HidKeyCode::No,
-                mods: mods | key.to_hid_modifiers(),
-            }
-        } else {
-            Self {
-                pos: pos,
-                keycode: key,
-                mods,
-            }
+        Self {
+            pos,
+            keycode: if key.is_modifier() { HidKeyCode::No } else { key },
+            mods: mods | key.to_hid_modifiers(),
         }
     }
 
@@ -1983,7 +1989,7 @@ impl RegisteredKey {
         // `KeyWithModifier` modifiers don't identify a key; a modifier action's modifiers do.
         let same_key = self.keycode == event.keycode && (self.keycode != HidKeyCode::No || self.mods == event.mods);
         match self.pos {
-            KeyboardEventPos::Macro(_) => same_key,
+            KeyboardEventPos::Macro => same_key,
             _ => self.pos == event.pos,
         }
     }

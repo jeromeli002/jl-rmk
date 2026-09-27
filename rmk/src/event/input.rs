@@ -67,9 +67,9 @@ pub enum KeyboardEventPos {
     RotaryEncoder(RotaryEncoderPos),
     /// Output of the combo at this index.
     Combo(u8),
-    /// Ops of the macro at this index.
-    Macro(u8),
-    /// Virtual position of a keyboard event, indexed by a u8.
+    /// A macro op. A macro's keys belong to no macro in particular.
+    Macro,
+    /// A software source of events rather than a key, indexed by a u8.
     Virtual(u8),
 }
 

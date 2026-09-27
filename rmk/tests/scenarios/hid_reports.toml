@@ -6,7 +6,7 @@
 # `MO(1)` at (0,3) adds a second layer for the rollover cases below: layer 1
 # row 1 pairs a plain keycode with its `SHIFTED()` twin, row 2 is four
 # distinct keycodes as a control. Layer 0 row 1 holds two `LShift` keys for
-# the shared-modifier case.
+# the shared-modifier case and a `WM()` mouse button.
 
 [layout]
 rows = 3
@@ -20,8 +20,8 @@ map = """
 [[keymap.layer]]
 keys = """
 AudioVolUp  SystemSleep  MouseRight  MO(1)
-LShift      LShift       No          No
-No          No           No          No
+LShift      LShift       WM(MouseBtn1, LCtrl)  No
+No          No           No                    No
 """
 
 [[keymap.layer]]
@@ -54,6 +54,16 @@ steps = [
   { release = [0, 2] },
 ]
 expect = [{ mouse = { x = 5 } }, { mouse = { } }]
+
+# `WM` on a mouse key holds the modifier in the keyboard report around the
+# click: down before the button, up after it.
+[[test]]
+name = "modifier_on_mouse_key_wraps_the_click"
+steps = [
+  { press = [1, 2] },
+  { release = [1, 2] },
+]
+expect = [["LCtrl"], { mouse = { buttons = 1 } }, { mouse = {} }, []]
 
 # `]` and its `SHIFTED()` twin `}` share one HID usage. The report
 # deduplicates held keycodes so the shared usage stays down until the
