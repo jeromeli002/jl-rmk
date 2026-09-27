@@ -1,10 +1,10 @@
 [layout]
 rows = 1
-cols = 3
-map = "(0,0) (0,1) (0,2)"
+cols = 4
+map = "(0,0) (0,1) (0,2) (0,3)"
 
 [[keymap.layer]]
-keys = "LCtrl MACRO(0) MouseBtn1"
+keys = "LCtrl MACRO(0) MouseBtn1 MACRO(1)"
 
 [[test]]
 name = "text_macro_restores_held_ctrl_before_mouse_click"
@@ -47,15 +47,28 @@ steps = [
 ]
 expect = [["LCtrl"], ["LCtrl"], ["LCtrl", "A"], ["LCtrl"], ["LCtrl"], []]
 
-# A press the macro never releases ends with the macro. It is held under the
-# macro's identity, so no physical key could release it later.
+# A press the macro never releases stays down after the macro ends, until a
+# macro's `up` for it runs, whichever macro sends it.
 [[test]]
-name = "macro_press_without_release_ends_with_the_macro"
+name = "macro_press_without_release_stays_until_a_macro_releases_it"
 behavior.macro = { macros = [
-  { operations = [
-    { operation = "down", keycode = "LCtrl" },
-    { operation = "tap", keycode = "A" },
-  ] },
+  { operations = [{ operation = "down", keycode = "LCtrl" }] },
+  { operations = [{ operation = "up", keycode = "LCtrl" }] },
 ] }
-steps = [{ tap = { pos = [0, 1], duration = 100 } }]
-expect = [["LCtrl"], ["LCtrl", "A"], ["LCtrl"], []]
+steps = [
+  { tap = { pos = [0, 1], duration = 100 } },
+  { tap = { pos = [0, 3], duration = 100 } },
+]
+expect = [["LCtrl"], []]
+
+# The user's own release of the key ends a macro's press of it too: a macro's
+# press has no release of its own, and tapping the key is how the user lets go.
+[[test]]
+name = "macro_press_without_release_ends_when_the_user_releases_the_key"
+behavior.macro = { macros = [{ operations = [{ operation = "down", keycode = "LCtrl" }] }] }
+steps = [
+  { tap = { pos = [0, 1], duration = 100 } },
+  { press = [0, 0] },
+  { release = [0, 0] },
+]
+expect = [["LCtrl"], ["LCtrl"], []]

@@ -65,8 +65,7 @@ expect = [
   [],
 ]
 
-# Each op takes its own report slot. Regression: every op registered under the
-# trigger key's position, so `down B` reused `down A`'s slot and A vanished.
+# Each op takes its own report slot.
 [[test]]
 name = "macro_holds_two_keys_at_once"
 behavior.macro = { macros = [

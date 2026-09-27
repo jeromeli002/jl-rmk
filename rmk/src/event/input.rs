@@ -59,7 +59,7 @@ impl KeyboardEvent {
 /// The position of the keyboard event.
 ///
 /// A physical position is a key (row, col) or a rotary encoder (id, direction).
-/// A synthesized position is the source of the keyboard event comes from.
+/// A synthesized position names the behavior that produced the event.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, MaxSize, Eq, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum KeyboardEventPos {

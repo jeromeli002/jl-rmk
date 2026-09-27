@@ -215,7 +215,7 @@ pub struct Keyboard<'a> {
     fork_states: [Option<ActiveFork>; FORK_MAX_NUM], // chosen replacement key of the currently triggered forks and the related modifier suppression
     fork_keep_mask: ModifierCombination, // aggregate here the explicit modifiers pressed since the last fork activations
 
-    /// Held actions in press order; the keyboard report is derived from it.
+    /// Current registered keys, ordered by the press time
     registered: Vec<RegisteredKey, 16>,
 
     /// Mouse state (report, acceleration, repeat counters, repeat deadlines)
@@ -988,8 +988,6 @@ impl<'a> Keyboard<'a> {
     /// - `event`: The keyboard event. When pressing (interrupting), trigger any delayed combo.
     ///   When releasing, only trigger combos that contain the key_action.
     async fn trigger_delayed_combo(&mut self, key_action: &KeyAction, event: KeyboardEvent) {
-        // The longest pending combo this event may fire: any on a press (it
-        // interrupts the combo wait), only one containing the key on a release.
         let delayed = self.keymap.with_combos(|combos| {
             combos
                 .iter()
@@ -1006,8 +1004,10 @@ impl<'a> Keyboard<'a> {
         }
     }
 
-    /// Fire combo `idx`: drop its chord keys from the held buffer, reset the combos
-    /// it shadows, and dispatch its output under the combo's own position.
+    /// Fire the combo `idx`:
+    /// - drop the chord keys from the held buffer
+    /// - reset the combos it shadows
+    /// - dispatch its output
     async fn fire_combo(&mut self, idx: usize, at: Instant) {
         let Some((output, chord)) = self
             .keymap
@@ -1038,10 +1038,8 @@ impl<'a> Keyboard<'a> {
         });
     }
 
-    /// Check combo before process keys.
-    ///
-    /// Returns whether the key still needs normal processing: `false` once a combo
-    /// buffered it, fired in its place, or consumed its release.
+    /// Handle combos before the key is processed, returns `true` if the key
+    /// should still be processed as a normal key.
     async fn process_combo(&mut self, key_action: &KeyAction, event: KeyboardEvent, event_time: Instant) -> bool {
         let current_layer = self.keymap.get_activated_layer();
 
@@ -1375,7 +1373,7 @@ impl<'a> Keyboard<'a> {
     /// - text macro related modifier suppressions + capitalization
     /// - registered (held) modifiers keys
     /// - one-shot modifiers
-    /// - the newest held key's own modifiers (Action::KeyWithModifier)
+    /// - `KeyWithModifier` modifiers, until the next press
     /// - possible fork related modifier suppressions
     pub fn resolve_modifiers(&mut self, pressed: bool) -> ModifierCombination {
         // Text typing macro should not be affected by any modifiers,
@@ -1405,11 +1403,9 @@ impl<'a> Keyboard<'a> {
         // Execute the remaining suppressions
         result &= !fork_suppress;
 
-        // A key's own modifiers decorate it while it is the newest held entry;
-        // a fork's suppression doesn't reach them.
-        if let Some(k) = self.registered.last()
-            && k.keycode != HidKeyCode::No
-        {
+        // Apply the modifiers from registered [`Action::KeyWithModifiers`],
+        // the suppression effect of forks should not apply on these
+        for k in self.registered.iter().filter(|k| k.keycode != HidKeyCode::No) {
             result |= k.mods;
         }
 
@@ -1443,7 +1439,6 @@ impl<'a> Keyboard<'a> {
                     }
                 }
             }
-            // Don't call register_key/unregister_key or send_report
             return;
         }
 
@@ -1717,6 +1712,10 @@ impl<'a> Keyboard<'a> {
             pos: KeyboardEventPos::Macro(macro_idx),
             pressed: true,
         };
+        let release = KeyboardEvent {
+            pressed: false,
+            ..event
+        };
         // Read macro operations until the end of the macro
         if let Some(macro_start_idx) = self.keymap.get_macro_sequence_start(macro_idx) {
             let mut offset = 0;
@@ -1732,7 +1731,7 @@ impl<'a> Keyboard<'a> {
                     }
                     MacroOperation::Release(k) => {
                         self.macro_texting = false;
-                        self.unregister_key(k, ModifierCombination::new(), event);
+                        self.unregister_key(k, ModifierCombination::new(), release);
                         self.send_keyboard_report_with_resolved_modifiers(false).await;
                     }
                     MacroOperation::Tap(k) => {
@@ -1740,7 +1739,7 @@ impl<'a> Keyboard<'a> {
                         self.register_key(k, ModifierCombination::new(), event);
                         self.send_keyboard_report_with_resolved_modifiers(true).await;
                         embassy_time::Timer::after_millis(2).await;
-                        self.unregister_key(k, ModifierCombination::new(), event);
+                        self.unregister_key(k, ModifierCombination::new(), release);
                         self.send_keyboard_report_with_resolved_modifiers(false).await;
                     }
                     // A macro can't trigger another macro: that would re-enter this queue, and a
@@ -1796,7 +1795,7 @@ impl<'a> Keyboard<'a> {
                         self.register_key(k, ModifierCombination::new(), event);
                         self.send_keyboard_report_with_resolved_modifiers(true).await;
                         embassy_time::Timer::after_millis(12).await;
-                        self.unregister_key(k, ModifierCombination::new(), event);
+                        self.unregister_key(k, ModifierCombination::new(), release);
                         self.send_keyboard_report_with_resolved_modifiers(false).await;
                         if is_cap {
                             self.macro_caps = false;
@@ -1808,15 +1807,8 @@ impl<'a> Keyboard<'a> {
                         embassy_time::Timer::after_millis(t as u64).await;
                     }
                     MacroOperation::End => {
-                        // A press without its release ends with the macro: it's held
-                        // under the macro's identity, so no physical key could end it.
-                        let mut unpaired = false;
-                        while let Some(&k) = self.registered.iter().find(|k| k.pos == event.pos) {
-                            self.unregister(k);
-                            unpaired = true;
-                        }
-                        // Also restore held modifiers after text typing stops suppressing them.
-                        if unpaired || self.macro_texting {
+                        if self.macro_texting {
+                            // Restore held modifiers after text typing stops suppressing them.
                             self.macro_texting = false;
                             self.send_keyboard_report_with_resolved_modifiers(false).await;
                         }
@@ -1896,58 +1888,48 @@ impl<'a> Keyboard<'a> {
         yield_now().await;
     }
 
-    /// Register `key`, a modifier keycode being a modifier action.
+    /// Register a pressed key.
     fn register_key(&mut self, key: HidKeyCode, mods: ModifierCombination, event: KeyboardEvent) {
-        self.register(RegisteredKey::new(event.pos, key, mods));
-    }
-
-    /// Unregister `key`, a modifier keycode being a modifier action.
-    fn unregister_key(&mut self, key: HidKeyCode, mods: ModifierCombination, event: KeyboardEvent) {
-        self.unregister(RegisteredKey::new(event.pos, key, mods));
-    }
-
-    /// Register what a held action contributes to the keyboard report.
-    fn register(&mut self, key: RegisteredKey) {
-        if key.keycode == HidKeyCode::No && key.mods.into_bits() == 0 {
-            return;
-        }
-        // A position holds one action, so a re-press replaces whatever a lost
-        // release left behind; a macro holds one entry per op.
-        if !matches!(key.pos, KeyboardEventPos::Macro(_)) {
-            self.registered.retain(|k| k.pos != key.pos);
-        }
-        // The boot report carries six keycodes; a seventh is dropped.
+        let key = RegisteredKey::new(event.pos, key, mods);
+        let before = self.held_modifiers();
+        // A press repeated without a release (a lost release, or a macro pressing a
+        // key twice) replaces the old entry.
+        self.registered.retain(|k| !k.matches(&key));
+        // The boot report has six keycode slots.
         let keys = self.registered.iter().filter(|k| k.keycode != HidKeyCode::No).count();
-        if key.keycode != HidKeyCode::No && keys >= 6 {
+        if key.keycode != HidKeyCode::No && keys >= 6 || self.registered.is_full() {
             warn!("Keyboard report full, dropped {:?}", key.keycode);
-        } else if self.registered.push(key).is_err() {
-            warn!("Registered keys full, dropped {:?}", key.keycode);
+        } else {
+            // `KeyWithModifier` modifiers apply only until the next press.
+            for k in self.registered.iter_mut().filter(|k| k.keycode != HidKeyCode::No) {
+                k.mods = ModifierCombination::new();
+            }
+            let _ = self.registered.push(key);
+            // A modifier pressed after a fork fired is not suppressed by it.
+            if key.keycode == HidKeyCode::No {
+                self.fork_keep_mask |= key.mods;
+            }
         }
-        if key.keycode == HidKeyCode::No {
-            publish_event(ModifierEvent {
-                modifier: self.held_modifiers(),
-            });
-            // if a modifier key arrives after fork activation, it should be kept
-            self.fork_keep_mask |= key.mods;
-        }
-    }
-
-    /// A release ends whatever its position holds; a macro op releases only what it pressed.
-    fn unregister(&mut self, key: RegisteredKey) {
-        let held = self
-            .registered
-            .iter()
-            .position(|k| k.pos == key.pos && (!matches!(key.pos, KeyboardEventPos::Macro(_)) || *k == key));
-        if let Some(i) = held
-            && self.registered.remove(i).keycode == HidKeyCode::No
-        {
+        if self.held_modifiers() != before {
             publish_event(ModifierEvent {
                 modifier: self.held_modifiers(),
             });
         }
     }
 
-    /// Every modifier some modifier action has down.
+    /// Unregister a released key.
+    fn unregister_key(&mut self, key: HidKeyCode, mods: ModifierCombination, event: KeyboardEvent) {
+        let key = RegisteredKey::new(event.pos, key, mods);
+        let before = self.held_modifiers();
+        self.registered.retain(|k| !k.matches(&key));
+        if self.held_modifiers() != before {
+            publish_event(ModifierEvent {
+                modifier: self.held_modifiers(),
+            });
+        }
+    }
+
+    /// Modifiers held by modifier actions.
     fn held_modifiers(&self) -> ModifierCombination {
         self.registered
             .iter()
@@ -1967,33 +1949,42 @@ impl<'a> Keyboard<'a> {
     }
 }
 
-/// What one held action contributes to the keyboard report.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug)]
 struct RegisteredKey {
-    /// Who holds it, and the identity its release matches on.
+    /// The pos(source) of the registered key.
     pos: KeyboardEventPos,
-    /// `No` for a modifier action.
+    /// Pressed keycode, `No` for a modifier action.
     keycode: HidKeyCode,
-    /// A modifier action's mods apply while it is held; a key's mods apply while
-    /// it is the newest held entry, so they decorate that key alone.
+    /// A modifier action's modifiers, or a `KeyWithModifier` key's.
     mods: ModifierCombination,
 }
 
 impl RegisteredKey {
-    /// A modifier keycode is a modifier action; anything else is a key with `mods`.
+    /// A modifier keycode counts as a modifier action.
     fn new(pos: KeyboardEventPos, key: HidKeyCode, mods: ModifierCombination) -> Self {
         if key.is_modifier() {
             Self {
-                pos,
+                pos: pos,
                 keycode: HidKeyCode::No,
                 mods: mods | key.to_hid_modifiers(),
             }
         } else {
             Self {
-                pos,
+                pos: pos,
                 keycode: key,
                 mods,
             }
+        }
+    }
+
+    /// Whether `event` refers to this entry. A macro's keys belong to nobody, so
+    /// any event on the same key refers to them.
+    fn matches(&self, event: &RegisteredKey) -> bool {
+        // `KeyWithModifier` modifiers don't identify a key; a modifier action's modifiers do.
+        let same_key = self.keycode == event.keycode && (self.keycode != HidKeyCode::No || self.mods == event.mods);
+        match self.pos {
+            KeyboardEventPos::Macro(_) => same_key,
+            _ => self.pos == event.pos,
         }
     }
 }

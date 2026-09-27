@@ -83,9 +83,7 @@ expect = [
   [],
 ]
 
-# A key's modifiers belong to that key, so two shifted keys each keep theirs.
-# Regression: `WM` modifiers were one shared byte, so releasing `>` took the
-# shift away from the still-held `}`.
+# `WM` modifiers belong to their key, so two `SHIFTED()` keys each keep theirs.
 [[test]]
 name = "shifted_keys_each_keep_their_own_shift"
 steps = [
@@ -98,10 +96,11 @@ steps = [
 ]
 expect = [["LShift", "Dot"], ["LShift", "Dot", "RightBracket"], ["LShift", "RightBracket"], []]
 
-# A key's modifiers apply while it is the newest held key: `]` pressed after
-# `>` types plain, and releasing `]` puts `>`'s shift back.
+# `WM` modifiers last until the next press and never come back: `]` pressed
+# after `>` types plain, and releasing `]` leaves `>` plain, since no modifier
+# should appear on a release.
 [[test]]
-name = "newest_held_key_decides_the_shift"
+name = "later_press_consumes_the_held_keys_shift"
 steps = [
   { press = [0, 3] },   # MO(1)
   { press = [1, 0] },   # >
@@ -110,11 +109,10 @@ steps = [
   { release = [1, 0] },
   { release = [0, 3] },
 ]
-expect = [["LShift", "Dot"], ["Dot", "RightBracket"], ["LShift", "Dot"], []]
+expect = [["LShift", "Dot"], ["Dot", "RightBracket"], ["Dot"], []]
 
 # Two keys sharing a modifier are two holders of it, like two keys sharing a
-# keycode above. Regression: modifiers were one bitmask, so releasing either
-# Shift key cleared the bit while the other was still held.
+# keycode above.
 [[test]]
 name = "shared_modifier_stays_down_until_last_holder_releases"
 steps = [

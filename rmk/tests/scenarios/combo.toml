@@ -32,8 +32,7 @@ steps = [
 expect = [["E"], [], ["R"], [], ["T"], []]
 
 # A combo output is held under the combo's own identity, so it and a physical
-# key sharing its modifier release independently. Regression: the combo's
-# release cleared the modifier bit the still-held `MT(B, LShift)` owned.
+# key sharing its modifier release independently.
 [[test]]
 name = "combo_modifier_output_and_held_key_release_independently"
 steps = [
