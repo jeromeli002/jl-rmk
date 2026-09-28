@@ -250,6 +250,11 @@ fn expand_test(
         })
         .transpose()?;
     let builder = expand_builder(&keymap, &behavior, rmk_config);
+    let build = if features.iter().any(|f| f.as_str() == "storage") {
+        quote! { build_with_flash(crate::simulator::Flash::new()) }
+    } else {
+        quote! { build() }
+    };
     let fn_name = format_ident!("{}", test.name);
 
     Ok(quote! {
@@ -258,7 +263,7 @@ fn expand_test(
         fn #fn_name() {
             ::rmk::test_support::test_block_on(async {
                 #behavior_stmt
-                let mut keyboard = #builder .build().await;
+                let mut keyboard = #builder .#build.await;
                 keyboard #(#steps)* .run().await;
             });
         }
