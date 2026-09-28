@@ -49,7 +49,8 @@ shared behavior for that test only. Tables merge key by key; arrays such as
 `behavior`, and `features`.
 
 `features` adds `#[cfg(feature = "...")]` gates; file and test features are
-combined. Test IDs are `<file>::<name>`, where `<file>` is the file stem with
+combined. Cases explicitly tagged with `storage` use simulated flash, including
+persistence replies, instead of the discard-only storage task. Test IDs are `<file>::<name>`, where `<file>` is the file stem with
 `-` replaced by `_`.
 
 ## Files
