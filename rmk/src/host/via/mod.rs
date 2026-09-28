@@ -1,3 +1,5 @@
+use core::cell::RefCell;
+
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use embassy_time::Instant;
 use embedded_io_async::{Read, Write};
@@ -9,14 +11,17 @@ use crate::hid::ViaReport;
 use crate::host::context::KeyboardContext;
 use crate::host::via::keycode_convert::{from_via_keycode, to_via_keycode};
 use crate::keymap::KeyMap;
-use crate::{MACRO_SPACE_SIZE, boot};
+use crate::{MACRO_MAX_NUM, boot};
 
 pub(crate) mod keycode_convert;
+mod macros;
 mod vial;
 
 pub struct VialService<'a> {
     ctx: KeyboardContext<'a>,
     vial_config: VialConfig<'static>,
+    /// The macros in Vial's byte format, the only form Vial reads or writes.
+    macros: RefCell<macros::MacroView>,
     #[cfg(feature = "host_lock")]
     locker: crate::host::lock::HostLock<'a>,
 }
@@ -26,6 +31,7 @@ impl<'a> VialService<'a> {
         Self {
             ctx: KeyboardContext::new(keymap),
             vial_config: config.vial_config,
+            macros: RefCell::new(macros::MacroView::new()),
             // Vial's poll cadence is ~100 ms (`VialCommand::UnlockPoll`).
             #[cfg(feature = "host_lock")]
             locker: crate::host::lock::HostLock::new(
@@ -147,50 +153,36 @@ impl<'a> VialService<'a> {
                 boot::jump_to_bootloader();
             }
             ViaCommand::DynamicKeymapMacroGetCount => {
-                report.input_data[1] = 32;
-                warn!("Macro get count -- to be implemented")
+                report.input_data[1] = MACRO_MAX_NUM as u8;
             }
             ViaCommand::DynamicKeymapMacroGetBufferSize => {
-                report.input_data[1] = (MACRO_SPACE_SIZE as u16 >> 8) as u8;
-                report.input_data[2] = (MACRO_SPACE_SIZE & 0xFF) as u8;
+                report.input_data[1] = (macros::MACRO_SPACE_SIZE as u16 >> 8) as u8;
+                report.input_data[2] = (macros::MACRO_SPACE_SIZE & 0xFF) as u8;
             }
             ViaCommand::DynamicKeymapMacroGetBuffer => {
                 let offset = BigEndian::read_u16(&report.output_data[1..3]) as usize;
                 let size = report.output_data[3] as usize;
+                // The payload is `[4..4 + size]` of a 32-byte report.
                 if size <= 28 {
-                    self.ctx.read_macro_buffer(offset, &mut report.input_data[4..4 + size]);
-                    debug!("Get macro buffer: offset: {}, data: {:?}", offset, report.input_data);
+                    macros::read(&self.ctx, &self.macros, offset, &mut report.input_data[4..4 + size]).await;
                 } else {
                     report.input_data[0] = 0xFF;
                 }
             }
             ViaCommand::DynamicKeymapMacroSetBuffer => {
-                // Every write writes all buffer space of the macro(if it's not empty)
-                let offset = BigEndian::read_u16(&report.output_data[1..3]);
-                // Current sequence size, <= 28
-                let size = report.output_data[3];
-                // `output_data` is 32 bytes, so the payload slice output_data[4..4 + size]
-                // is only valid for size <= 28. Reject oversized writes instead of
-                // panicking, mirroring the DynamicKeymapMacroGetBuffer handler above.
+                let offset = BigEndian::read_u16(&report.output_data[1..3]) as usize;
+                let size = report.output_data[3] as usize;
                 if size <= 28 {
-                    // End of current sequence in the macro cache
-                    // The first sequence, reset the macro cache
-                    if offset == 0 {
-                        self.ctx.reset_macro_buffer();
-                    }
-
-                    // Update macro cache + flush full buffer to storage
-                    info!("Setting macro buffer, offset: {}, size: {}", offset, size);
-                    let _ = self
-                        .ctx
-                        .write_macro_buffer(offset as usize, &report.output_data[4..4 + size as usize])
-                        .await;
+                    macros::write(&self.ctx, &self.macros, offset, &report.output_data[4..4 + size]).await;
                 } else {
                     report.input_data[0] = 0xFF;
                 }
             }
+            // Every slot commits an empty macro, under the same skip rule as a save.
             ViaCommand::DynamicKeymapMacroReset => {
-                warn!("Macro reset -- to be implemented")
+                for idx in 0..MACRO_MAX_NUM as u8 {
+                    macros::commit(&self.ctx, &self.macros, idx, 0, 0).await;
+                }
             }
             ViaCommand::DynamicKeymapGetLayerCount => {
                 report.input_data[1] = self.ctx.keymap_dimensions().2 as u8;

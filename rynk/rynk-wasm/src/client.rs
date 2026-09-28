@@ -19,11 +19,12 @@ use rynk::rmk_types::ble::BleStatus;
 use rynk::rmk_types::combo::Combo;
 use rynk::rmk_types::connection::{ConnectionStatus, ConnectionType};
 use rynk::rmk_types::fork::Fork;
+use rynk::rmk_types::keyboard_macros::MacroOp;
 use rynk::rmk_types::led_indicator::LedIndicator;
 use rynk::rmk_types::morse::Morse;
 use rynk::rmk_types::protocol::rynk::{
     BehaviorConfig, DeviceCapabilities, DeviceInfo, GetComboBulkResponse, GetKeymapBulkResponse, GetMorseBulkResponse,
-    LockStatus, MacroData, MatrixState, PeripheralStatus, ProtocolVersion, SetComboBulkRequest, SetKeymapBulkRequest,
+    LockStatus, MatrixState, PeripheralStatus, ProtocolVersion, SetComboBulkRequest, SetKeymapBulkRequest,
     SetMorseBulkRequest, StorageResetMode,
 };
 use rynk::{Client, Driver, LayoutInfo, RynkDevice, RynkHostError, TopicEvent};
@@ -83,6 +84,11 @@ impl RynkClient {
     /// runs concurrently with the request methods.
     pub async fn next_topic(&self) -> Result<TopicEvent, JsValue> {
         self.drive(async { Ok(self.client.next_topic().await) }).await
+    }
+
+    /// Replace macro `index` with `ops`; the native method takes the ops by reference.
+    pub async fn write_macro(&self, index: u8, ops: Vec<MacroOp>) -> Result<(), JsValue> {
+        self.drive(self.client.write_macro(index, &ops)).await
     }
 }
 
@@ -144,8 +150,7 @@ endpoints! {
     set_morse(index: u8, config: Morse) -> (),
     get_morse_bulk(start_index: u8) -> GetMorseBulkResponse,
     set_morse_bulk(request: SetMorseBulkRequest) -> (),
-    get_macro(offset: u16) -> MacroData,
-    set_macro(offset: u16, data: MacroData) -> (),
+    read_macro(index: u8) -> Vec<MacroOp>,
     // behavior
     get_behavior() -> BehaviorConfig,
     set_behavior(config: BehaviorConfig) -> (),

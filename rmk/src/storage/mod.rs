@@ -17,9 +17,10 @@ use sequential_storage::cache::page_states::CalculatedPageStates;
 use sequential_storage::map::{Key as MapKey, MapConfig, MapStorage, PostcardValue, SerializationError};
 #[cfg(feature = "host")]
 use {
-    crate::{MACRO_SPACE_SIZE, keyboard::combo::ComboConfig},
+    crate::keyboard::combo::ComboConfig,
     rmk_types::action::{EncoderAction, KeyAction},
     rmk_types::fork::Fork,
+    rmk_types::keyboard_macros::Macro,
     rmk_types::morse::Morse,
 };
 
@@ -33,11 +34,14 @@ use crate::split::ble::PeerAddress;
 
 /// An operation request to the `Storage` task.
 #[allow(clippy::large_enum_variant)]
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) enum FlashOperationMessage {
     /// Save a [`StorageItem`] to the storage.
     /// `Some(id)` is answered once the write lands; `None` is fire-and-forget.
     Store(StorageItem, Option<u8>),
+    /// Write the macro in [`MACRO_SLOT`] as macro `idx`, answered once it lands.
+    #[cfg(feature = "host")]
+    StoreMacro(u8, embassy_sync::mutex::MutexGuard<'static, crate::RawMutex, Macro>, u8),
     /// Read a stored value by [`StorageKey`].
     /// Answered once on `REPLY` after every earlier message (FIFO).
     Read(StorageKey, u8),
@@ -52,6 +56,10 @@ static FLASH_CHANNEL: Channel<crate::RawMutex, FlashOperationMessage, { crate::F
 static REQUEST_ID: Mutex<crate::RawMutex, u8> = Mutex::new(0);
 /// Storage's reply of a request, `(request id, reply)`.
 static REPLY: Signal<crate::RawMutex, (u8, Result<Option<StorageValue>, ()>)> = Signal::new();
+/// The macro on its way to flash, kept out of the messages so none is sized by it. Its
+/// guard rides the write request, so only the writer, then the storage task, reach it.
+#[cfg(feature = "host")]
+static MACRO_SLOT: Mutex<crate::RawMutex, Macro> = Mutex::new(Macro(heapless::Vec::new()));
 
 /// Request the storage.
 /// For `Store`, it returns the result of the store. And for `Read`, it returns the requested item.
@@ -71,6 +79,16 @@ async fn request(build: impl FnOnce(u8) -> FlashOperationMessage) -> Result<Opti
 /// Write `item`, returning once it has landed on flash.
 pub(crate) async fn store(item: StorageItem) -> Result<(), ()> {
     request(|id| FlashOperationMessage::Store(item, Some(id)))
+        .await
+        .map(|_| ())
+}
+
+/// Write the macro `fill` puts in the slot as macro `idx`, returning once it has landed.
+#[cfg(feature = "host")]
+pub(crate) async fn store_macro(idx: u8, fill: impl FnOnce(&mut Macro)) -> Result<(), ()> {
+    let mut slot = MACRO_SLOT.lock().await;
+    fill(&mut slot);
+    request(|id| FlashOperationMessage::StoreMacro(idx, slot, id))
         .await
         .map(|_| ())
 }
@@ -121,8 +139,9 @@ pub(crate) enum StorageKey {
     LayoutOption,
     BehaviorConfig,
     ConnectionType,
+    /// One macro per item, keyed by macro index.
     #[cfg(feature = "host")]
-    MacroData,
+    Macro(u8),
     #[cfg(feature = "host")]
     Keymap {
         layer: u8,
@@ -159,8 +178,6 @@ pub(crate) enum StorageItem {
     LayoutOption(u32),
     BehaviorConfig(BehaviorConfig),
     ConnectionType(ConnectionType),
-    #[cfg(feature = "host")]
-    MacroData([u8; MACRO_SPACE_SIZE]),
     #[cfg(feature = "host")]
     Keymap {
         layer: u8,
@@ -209,8 +226,6 @@ impl StorageItem {
             Self::LayoutOption(v) => (StorageKey::LayoutOption, StorageValue::LayoutOption(v)),
             Self::BehaviorConfig(v) => (StorageKey::BehaviorConfig, StorageValue::BehaviorConfig(v)),
             Self::ConnectionType(v) => (StorageKey::ConnectionType, StorageValue::ConnectionType(v)),
-            #[cfg(feature = "host")]
-            Self::MacroData(v) => (StorageKey::MacroData, StorageValue::MacroData(v)),
             #[cfg(feature = "host")]
             Self::Keymap {
                 layer,
@@ -266,7 +281,7 @@ pub(crate) enum StorageValue {
     BehaviorConfig(BehaviorConfig),
     ConnectionType(ConnectionType),
     #[cfg(feature = "host")]
-    MacroData(#[serde(with = "crate::host::storage::macro_bytes_serde")] [u8; MACRO_SPACE_SIZE]),
+    Macro(Macro),
     #[cfg(feature = "host")]
     KeyAction(KeyAction),
     #[cfg(feature = "host")]
@@ -351,7 +366,7 @@ pub(crate) const SCHEMA_HASH: u32 = {
     // `keyboard.toml` sizes decide how a stored value is framed.
     #[cfg(feature = "host")]
     {
-        hash = fnv_hash(hash, &(MACRO_SPACE_SIZE as u32).to_le_bytes());
+        hash = fnv_hash(hash, &(crate::MACRO_MAX_SIZE as u32).to_le_bytes());
         hash = fnv_hash(hash, &(crate::COMBO_SIZE as u32).to_le_bytes());
         hash = fnv_hash(hash, &(crate::MORSE_SIZE as u32).to_le_bytes());
     }
@@ -388,6 +403,16 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
     // Like `store`: split first so the future holds the pair, not the pair and `item`.
     fn put(&mut self, item: StorageItem) -> impl Future<Output = Result<(), SSError<F::Error>>> {
         let (key, value) = item.split();
+        self.put_value(key, value)
+    }
+
+    // Not an `async fn`, whose future would hold `value` twice.
+    #[allow(clippy::manual_async_fn)]
+    fn put_value(
+        &mut self,
+        key: StorageKey,
+        value: StorageValue,
+    ) -> impl Future<Output = Result<(), SSError<F::Error>>> {
         async move {
             self.flash
                 .store_item(&mut self.buffer, &key, &value)
@@ -483,7 +508,6 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
         put(StorageItem::BehaviorConfig(behavior.into())).await;
         put(StorageItem::DefaultLayer(0)).await;
         put(StorageItem::LayoutOption(0)).await;
-        put(StorageItem::MacroData(behavior.keyboard_macros.macro_sequences)).await;
 
         for (layer, layer_data) in data.keymap.iter().enumerate() {
             for (row, row_data) in layer_data.iter().enumerate() {
@@ -530,6 +554,15 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
             })
             .await;
         }
+        // Every slot, so a macro the user wrote over the host protocol is replaced by
+        // its default or cleared. Last, as `put` holds `self` until its final use.
+        for idx in 0..crate::MACRO_MAX_NUM as u8 {
+            let ops = behavior.keyboard_macros.get(idx as usize).copied().unwrap_or(&[]);
+            let value = StorageValue::Macro(Macro::from_slice(ops).unwrap_or_default());
+            if let Err(e) = self.put_value(StorageKey::Macro(idx), value).await {
+                print_storage_error::<F>(e);
+            }
+        }
     }
 }
 
@@ -547,6 +580,14 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
                     }
                 }
                 FlashOperationMessage::Read(key, id) => (id, self.fetch(key).await),
+                #[cfg(feature = "host")]
+                FlashOperationMessage::StoreMacro(idx, mut slot, id) => {
+                    // Moved out, so the slot unlocks before the flash write.
+                    let value = StorageValue::Macro(core::mem::take(&mut *slot));
+                    drop(slot);
+                    let result = self.put_value(StorageKey::Macro(idx), value).await;
+                    (id, result.map(|_| None).map_err(print_storage_error::<F>))
+                }
                 FlashOperationMessage::Reset => {
                     let _ = self.flash.erase_all().await;
                     reboot_keyboard();
@@ -578,13 +619,11 @@ pub(crate) fn print_storage_error<F: AsyncNorFlash>(e: SSError<F::Error>) {
 const fn get_buffer_size() -> usize {
     #[cfg(feature = "host")]
     {
-        // The largest item is the macro buffer plus its framing, rounded up because
+        use postcard::experimental::max_size::MaxSize;
+        // The largest item is a macro plus its key and framing, rounded up because
         // `sequential-storage` wants 32-byte alignment on some flashes.
-        let buffer_size = if crate::MACRO_SPACE_SIZE < 248 {
-            256
-        } else {
-            crate::MACRO_SPACE_SIZE + 8
-        };
+        let macro_item = 16 + Macro::POSTCARD_MAX_SIZE;
+        let buffer_size = if macro_item < 256 { 256 } else { macro_item };
         (buffer_size + 31) & !31
     }
 
@@ -608,6 +647,8 @@ pub(crate) async fn drain_flash_channel() {
             FlashOperationMessage::Read(_, id) | FlashOperationMessage::Store(_, Some(id)) => {
                 REPLY.signal((id, Ok(None)))
             }
+            #[cfg(feature = "host")]
+            FlashOperationMessage::StoreMacro(_, _, id) => REPLY.signal((id, Ok(None))),
             _ => {}
         }
     }
@@ -683,6 +724,45 @@ mod tests {
             FLASH_CHANNEL.try_receive(),
             Ok(FlashOperationMessage::Store(_, Some(_)))
         ));
+    }
+
+    /// A write cancelled after `send` still carries its own macro in its own guard,
+    /// and the next write waits for that guard instead of overwriting the slot.
+    #[cfg(feature = "host")]
+    #[test]
+    fn a_cancelled_macro_write_keeps_its_own_content() {
+        use rmk_types::keyboard_macros::MacroOp;
+
+        let mut cx = Context::from_waker(Waker::noop());
+        crate::test_support::clear_flash_channel();
+        const A: MacroOp = MacroOp::Char(b'a');
+
+        {
+            let mut cancelled = pin!(store_macro(1, |slot| *slot = Macro::from_slice(&[A]).unwrap()));
+            assert!(cancelled.as_mut().poll(&mut cx).is_pending());
+        }
+        let mut write = pin!(store_macro(2, |slot| *slot = Macro::default()));
+        assert!(write.as_mut().poll(&mut cx).is_pending());
+
+        let Ok(FlashOperationMessage::StoreMacro(1, slot, stale)) = FLASH_CHANNEL.try_receive() else {
+            panic!("expected the cancelled write");
+        };
+        assert_eq!(&**slot, &[A]);
+        assert!(
+            FLASH_CHANNEL.try_receive().is_err(),
+            "the next write waits for the slot"
+        );
+        drop(slot);
+        REPLY.signal((stale, Ok(None)));
+
+        assert!(write.as_mut().poll(&mut cx).is_pending());
+        let Ok(FlashOperationMessage::StoreMacro(2, slot, id)) = FLASH_CHANNEL.try_receive() else {
+            panic!("expected the live write");
+        };
+        assert!(slot.is_empty());
+        drop(slot);
+        REPLY.signal((id, Ok(None)));
+        assert!(matches!(write.as_mut().poll(&mut cx), Poll::Ready(Ok(()))));
     }
 
     #[cfg(all(feature = "_ble", feature = "split"))]
@@ -942,7 +1022,7 @@ mod tests {
             StorageKey::BehaviorConfig,
             StorageKey::ConnectionType,
             #[cfg(feature = "host")]
-            StorageKey::MacroData,
+            StorageKey::Macro(5),
             #[cfg(feature = "host")]
             StorageKey::Keymap {
                 layer: 2,
@@ -978,7 +1058,7 @@ mod tests {
             StorageValue::BehaviorConfig((&RuntimeBehaviorConfig::default()).into()),
             StorageValue::ConnectionType(ConnectionType::Usb),
             #[cfg(feature = "host")]
-            StorageValue::MacroData([0; MACRO_SPACE_SIZE]),
+            StorageValue::Macro(Macro::default()),
             #[cfg(feature = "host")]
             StorageValue::KeyAction(KeyAction::No),
             #[cfg(feature = "host")]

@@ -4,6 +4,7 @@
 #[macro_use]
 mod macros;
 mod keymap;
+mod vial;
 
 use defmt::{info, unwrap};
 use defmt_rtt as _;
@@ -22,7 +23,7 @@ use nrf_sdc::mpsl::MultiprotocolServiceLayer;
 use nrf_sdc::{self as sdc, mpsl};
 use panic_probe as _;
 use rmk::ble::BleTransport;
-use rmk::config::{BehaviorConfig, DeviceConfig, LockConfig, PositionalConfig, RmkConfig, StorageConfig};
+use rmk::config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig};
 use rmk::debounce::default_debouncer::DefaultDebouncer;
 use rmk::host::HostService;
 use rmk::input_device::pmw3610::{Pmw3610, Pmw3610Config};
@@ -33,6 +34,7 @@ use rmk::processor::builtin::wpm::WpmProcessor;
 use rmk::usb::UsbTransport;
 use rmk::{DefaultPacketPool, KeymapData, PacketPool, initialize_keymap_and_storage, run_all};
 use static_cell::StaticCell;
+use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
 
 type RandomSource = cracen::Cracen<'static, Blocking>;
 
@@ -55,7 +57,7 @@ async fn mpsl_task(mpsl: &'static MultiprotocolServiceLayer<'static>) -> ! {
 const SDC_MEM_SIZE: usize = 5788;
 const FLASH_START_ADDR: usize = 0x120000;
 const FLASH_SECTORS: u8 = 6;
-const RYNK_UNLOCK_KEYS: &[(u8, u8)] = &[(0, 0), (0, 1)];
+const UNLOCK_KEYS: &[(u8, u8)] = &[(0, 0), (0, 1)];
 
 const L2CAP_TXQ: u8 = 4;
 const L2CAP_RXQ: u8 = 4;
@@ -195,11 +197,7 @@ async fn main(spawner: Spawner) {
     };
     let rmk_config = RmkConfig {
         device_config: keyboard_device_config,
-        lock_config: LockConfig {
-            unlock_keys: RYNK_UNLOCK_KEYS,
-            insecure: false,
-            write_requires_unlock: false,
-        },
+        vial_config: VialConfig::new(VIAL_KEYBOARD_ID, VIAL_KEYBOARD_DEF, UNLOCK_KEYS),
         storage_config,
         ..Default::default()
     };

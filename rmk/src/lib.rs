@@ -78,6 +78,8 @@ pub use keyboard::auto_mouse_layer::AutoMouseLayerRunner;
 use keymap::KeyMap;
 pub use keymap::KeymapData;
 pub use rmk_macro as macros;
+// Spells a macro's text as `MacroOp::Char`s: `text!("hi")`.
+pub use rmk_macro::text;
 pub use rmk_types as types;
 #[cfg(feature = "_ble")]
 pub use trouble_host::prelude::*;
@@ -111,7 +113,6 @@ pub mod hid;
 pub mod host;
 pub mod input_device;
 pub mod keyboard;
-pub mod keyboard_macros;
 pub mod keymap;
 pub mod layout_macro;
 pub mod light;

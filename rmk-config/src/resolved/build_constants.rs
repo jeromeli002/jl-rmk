@@ -38,7 +38,8 @@ pub struct BuildConstants {
     pub morse_max_num: usize,
     pub morse_profile_max_num: usize,
     pub max_patterns_per_key: usize,
-    pub macro_space_size: usize,
+    pub macro_max_num: usize,
+    pub macro_max_size: usize,
     pub debounce_time: u16,
     pub mouse_key_interval: u16,
     pub mouse_wheel_interval: u16,
@@ -51,7 +52,6 @@ pub struct BuildConstants {
     pub split_battery_peripheral_user_descriptions: Vec<String>,
     pub ble_profiles_num: usize,
     pub split_central_sleep_timeout_seconds: u32,
-    pub protocol_macro_chunk_size: usize,
     pub auto_mouse_layer_max_num: usize,
     /// Rynk RX/TX buffer size (bytes).
     pub rynk_buffer_size: usize,
@@ -245,11 +245,11 @@ impl crate::KeyboardTomlConfig {
                 protocol_limits::MAX_MORSE_SIZE
             ));
         }
-        if rmk.protocol_macro_chunk_size > protocol_limits::MAX_MACRO_DATA_SIZE {
+        if rmk.macro_max_size > protocol_limits::MAX_MACRO_SIZE {
             return Err(format!(
-                "protocol_macro_chunk_size ({}) exceeds protocol ceiling MAX_MACRO_DATA_SIZE ({})",
-                rmk.protocol_macro_chunk_size,
-                protocol_limits::MAX_MACRO_DATA_SIZE
+                "macro_max_size ({}) exceeds protocol ceiling MAX_MACRO_SIZE ({})",
+                rmk.macro_max_size,
+                protocol_limits::MAX_MACRO_SIZE
             ));
         }
         let auto_mouse_layer_max_num = rmk
@@ -278,7 +278,8 @@ impl crate::KeyboardTomlConfig {
         validate_u8_capability("morse_max_num", rmk.morse_max_num)?;
         validate_u8_capability("split_peripherals_num", split_peripherals_num)?;
         validate_u8_capability("ble_profiles_num", rmk.ble_profiles_num)?;
-        validate_u16_capability("macro_space_size", rmk.macro_space_size)?;
+        validate_u8_capability("macro_max_num", rmk.macro_max_num)?;
+        validate_u8_capability("macro_max_size", rmk.macro_max_size)?;
         validate_u16_capability("rynk_buffer_size", rmk.rynk_buffer_size)?;
         Ok(BuildConstants {
             custom_message_max_size: rmk.custom_message_max_size,
@@ -288,7 +289,8 @@ impl crate::KeyboardTomlConfig {
             morse_max_num: rmk.morse_max_num,
             morse_profile_max_num: rmk.morse_profile_max_num,
             max_patterns_per_key: rmk.max_patterns_per_key,
-            macro_space_size: rmk.macro_space_size,
+            macro_max_num: rmk.macro_max_num,
+            macro_max_size: rmk.macro_max_size,
             debounce_time: rmk.debounce_time,
             mouse_key_interval: rmk.mouse_key_interval,
             mouse_wheel_interval: rmk.mouse_wheel_interval,
@@ -301,7 +303,6 @@ impl crate::KeyboardTomlConfig {
             split_battery_peripheral_user_descriptions,
             ble_profiles_num: rmk.ble_profiles_num,
             split_central_sleep_timeout_seconds: rmk.split_central_sleep_timeout_seconds,
-            protocol_macro_chunk_size: rmk.protocol_macro_chunk_size,
             auto_mouse_layer_max_num,
             rynk_buffer_size: rmk.rynk_buffer_size,
             dongle_pairing_window_secs: rmk.dongle_pairing_window_secs,
@@ -723,10 +724,10 @@ mod tests {
             Err("ble_profiles_num (256) exceeds the u8 host capability field (max 255)".to_string())
         );
 
-        assert!(validate_u16_capability("macro_space_size", 65535).is_ok());
+        assert!(validate_u16_capability("rynk_buffer_size", 65535).is_ok());
         assert_eq!(
-            validate_u16_capability("macro_space_size", 65536),
-            Err("macro_space_size (65536) exceeds the u16 host capability field (max 65535)".to_string())
+            validate_u16_capability("rynk_buffer_size", 65536),
+            Err("rynk_buffer_size (65536) exceeds the u16 host capability field (max 65535)".to_string())
         );
     }
 }

@@ -11,8 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING**: Keyboard macros are reworked around `MacroOp` lists. In Rust, `BehaviorConfig::keyboard_macros` is a `&'static [&'static [MacroOp]]` checked at compile time with `validate_default_macros`, `text!("...")` spells a text macro, and `define_macro_sequences`, `to_macro_sequence` and `MacroOperation` are gone. In `keyboard.toml`, `[rmk] macro_max_num` (default 32) and `macro_max_size` (default 96 operations) are the limits and Vial's macro memory is `macro_max_num + macro_max_size` bytes; `macro_space_size` and `protocol_macro_chunk_size` are removed, so a config that still sets them fails to build
+- **BREAKING**: Rynk protocol 0.2: `GetMacro`/`SetMacro` move one whole macro per call (`u8` index, `Macro`, `SetMacroRequest`); `DeviceCapabilities` gains `max_macros`, `macro_max_size` and `macros_writable` and loses `macro_space_size` and `macro_chunk_size`
+
 ### Added
 
+- Macro operations accept any single action (`WM`, `MO`, `OSM`, ...) without the `vial` feature, and a new `pause_for_release` operation (`MacroOp::PauseForRelease`) runs the rest of the macro when the macro key is released
 - PMW3610 `force_awake` now follows the keyboard's sleep state, ZMK style: the sensor is held in RUN while the keyboard is awake and released to its REST modes when the idle sleep starts. `PointingDriver` gained a default-implemented `set_low_power` hint and `PointingDevice` subscribes to `SleepStateEvent`; each sensor in `keyboard.toml` reserves its subscriber slot automatically.
 - Make Trouble BLE roles explicit, document environment-variable memory tuning, update the nRF52832 examples to peripheral-only SDC, and derive split notification capacity from Trouble's configured packet-pool MTU.
 - Give dongles a USB DFU runtime interface: a DETACH in the 30 s after plug-in reboots into the bootloader (`jump_to_bootloader`), so a dongle can be updated with `dfu-util` or rmk-gui although its host protocol is relayed to the keyboard.

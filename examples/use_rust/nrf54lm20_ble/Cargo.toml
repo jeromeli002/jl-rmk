@@ -11,7 +11,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 rmk = { path = "../../../rmk", default-features = false, features = [
-    "rynk",
+    "vial",
     "async_matrix",
     "nrf54lm20_ble",
     "storage",

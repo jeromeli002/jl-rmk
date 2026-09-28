@@ -1,9 +1,12 @@
 //! Via/Vial host exchanges and their live-keyboard integration tests.
 
-use rmk::k;
+use rmk::config::BehaviorConfig;
 use rmk::test_support::{test_block_on, to_via_keycode};
-use rmk::types::action::{EncoderAction, KeyAction};
-use rmk::types::keycode::HidKeyCode;
+use rmk::types::action::{Action, EncoderAction, KeyAction};
+use rmk::types::constants::{MACRO_MAX_NUM, MACRO_MAX_SIZE};
+use rmk::types::keyboard_macros::MacroOp;
+use rmk::types::keycode::{HidKeyCode, KeyCode};
+use rmk::{k, macros, text};
 use rmk_types::protocol::vial::{
     SettingKey, VIA_PROTOCOL_VERSION, VIAL_EP_SIZE as REPORT, ViaCommand, VialCommand, VialDynamic,
 };
@@ -191,6 +194,145 @@ fn morse_write_changes_the_tap() {
     });
 }
 
+/// Macro 0 is `tap A` then a pause Vial cannot spell; macro 1 types `hi`.
+const MACROS: &[&[MacroOp]] = &[
+    &[
+        MacroOp::Tap(Action::Key(KeyCode::Hid(HidKeyCode::A))),
+        MacroOp::PauseForRelease,
+    ],
+    &text!("hi"),
+];
+
+/// A two-key keyboard, `MACRO(0)` and `MACRO(1)`, with [`MACROS`] compiled in.
+fn macro_keyboard() -> crate::simulator::SimKeyboardBuilder<1, 2, 1, 0> {
+    SimKeyboard::builder([[[macros!(0), macros!(1)]]]).behavior_config(BehaviorConfig {
+        keyboard_macros: MACROS,
+        ..Default::default()
+    })
+}
+
+/// A `DynamicKeymapMacroGetBuffer`/`SetBuffer` report for `size` bytes at `offset`.
+fn macro_buffer(cmd: ViaCommand, offset: u16, payload: &[u8]) -> [u8; REPORT] {
+    let mut request = via(cmd);
+    request[1..3].copy_from_slice(&offset.to_be_bytes());
+    request[3] = payload.len() as u8;
+    request[4..4 + payload.len()].copy_from_slice(payload);
+    request
+}
+
+/// vial-gui reads the macros as one buffer in Vial's own encoding: every macro
+/// rendered and `0x00`-terminated, an op Vial cannot spell left out, and the
+/// rest of the view zero.
+#[test]
+fn macro_buffer_renders_the_macros() {
+    test_block_on(async {
+        let mut keyboard = macro_keyboard().build().await;
+        let request = macro_buffer(ViaCommand::DynamicKeymapMacroGetBuffer, 0, &[0; 28]);
+        let reply = macro_buffer(
+            ViaCommand::DynamicKeymapMacroGetBuffer,
+            0,
+            &[
+                0x01, 0x01, 0x04, 0x00, // tap A, the pause left out
+                b'h', b'i', 0x00, // hi
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ],
+        );
+        keyboard.host_exchange(request, reply);
+        keyboard.run().await;
+    });
+}
+
+/// Save [`MACROS`] the way vial-gui does, with slot 0 changed to `tap B`: every
+/// macro from offset 0, each `0x00`-terminated, without padding, the last
+/// packet sent twice when `resend_last`. The packets are 8 bytes rather than
+/// vial-gui's 28 so that the resent one lands past offset 0.
+#[cfg(feature = "storage")]
+async fn save_from_vial_gui(resend_last: bool) -> (SimKeyboard, crate::simulator::Flash) {
+    let flash = crate::simulator::Flash::new();
+    let mut keyboard = macro_keyboard().build_with_flash(flash.clone()).await;
+    // Slot 0 becomes `tap B`, slot 1 is sent back as read, the rest are empty.
+    let mut data = vec![0x01, 0x01, 0x05, 0x00, b'h', b'i', 0x00];
+    data.resize(7 + MACRO_MAX_NUM - 2, 0);
+    let packets: Vec<_> = data
+        .chunks(8)
+        .enumerate()
+        .map(|(i, chunk)| macro_buffer(ViaCommand::DynamicKeymapMacroSetBuffer, i as u16 * 8, chunk))
+        .collect();
+    for packet in &packets {
+        keyboard.echo(*packet);
+    }
+    if resend_last {
+        keyboard.echo(packets[1]);
+    }
+    keyboard.run().await;
+    (keyboard, flash)
+}
+
+/// Only the slot the user changed reaches the flash: a save writes as much as
+/// one `SetMacro`, a resent packet writes nothing, and after a restart the
+/// saved macro still wins.
+#[cfg(feature = "storage")]
+#[test]
+fn macro_save_from_vial_gui_writes_only_the_changed_slot() {
+    test_block_on(async {
+        let (_, resent) = save_from_vial_gui(true).await;
+        let one_write = {
+            let flash = crate::simulator::Flash::new();
+            let mut keyboard = macro_keyboard().build_with_flash(flash.clone()).await;
+            keyboard.echo(macro_buffer(
+                ViaCommand::DynamicKeymapMacroSetBuffer,
+                0,
+                &[0x01, 0x01, 0x05, 0x00],
+            ));
+            keyboard.run().await;
+            flash.writes()
+        };
+        let flash = {
+            let (mut keyboard, flash) = save_from_vial_gui(false).await;
+            assert_eq!(flash.writes(), one_write, "only slot 0 is written");
+            assert_eq!(resent.writes(), flash.writes(), "a resent packet writes nothing");
+            keyboard
+                .tap(0, 0, 10)
+                .expect_keys([HidKeyCode::B])
+                .expect_keys([])
+                .tap(0, 1, 10)
+                .expect_keys([HidKeyCode::H])
+                .expect_keys([])
+                .expect_keys([HidKeyCode::I])
+                .expect_keys([])
+                .expect_keys([])
+                .run()
+                .await;
+            flash
+        };
+        let mut keyboard = macro_keyboard().build_with_flash(flash).await;
+        keyboard
+            .tap(0, 0, 10)
+            .expect_keys([HidKeyCode::B])
+            .expect_keys([])
+            .run()
+            .await;
+    });
+}
+
+/// A reset clears the slots that render to something and leaves the empty ones
+/// alone, so a second reset has nothing left to write.
+#[cfg(feature = "storage")]
+#[test]
+fn macro_reset_clears_the_slots_that_have_macros() {
+    test_block_on(async {
+        let flash = crate::simulator::Flash::new();
+        let mut keyboard = macro_keyboard().build_with_flash(flash.clone()).await;
+        keyboard.echo(via(ViaCommand::DynamicKeymapMacroReset));
+        keyboard.tap(0, 0, 10).run().await;
+        let cleared = flash.writes();
+        assert!(cleared > 0, "the two macros are cleared");
+        keyboard.echo(via(ViaCommand::DynamicKeymapMacroReset));
+        keyboard.run().await;
+        assert_eq!(flash.writes(), cleared, "nothing left to clear");
+    });
+}
+
 #[cfg(feature = "storage")]
 #[test]
 fn behavior_write_survives_restart() {
@@ -210,6 +352,98 @@ fn behavior_write_survives_restart() {
             .expect_no_report(60)
             .expect_keys([HidKeyCode::A])
             .release(0, 0)
+            .expect_keys([])
+            .run()
+            .await;
+    });
+}
+
+/// Save `data` from offset 0 in 28-byte packets, the way vial-gui does.
+fn save_macro_buffer(keyboard: &mut SimKeyboard, data: &[u8]) {
+    for (i, chunk) in data.chunks(28).enumerate() {
+        keyboard.echo(macro_buffer(
+            ViaCommand::DynamicKeymapMacroSetBuffer,
+            i as u16 * 28,
+            chunk,
+        ));
+    }
+}
+
+/// Vial is told the buffer holds `MACRO_MAX_NUM + MACRO_MAX_SIZE` bytes, and a
+/// save that spends all of it on one macro of single-byte ops is kept whole.
+#[cfg(feature = "storage")]
+#[test]
+fn the_longest_macro_vial_can_save_is_kept() {
+    const SPACE: usize = MACRO_MAX_NUM + MACRO_MAX_SIZE;
+    test_block_on(async {
+        let flash = crate::simulator::Flash::new();
+        let mut keyboard = macro_keyboard().build_with_flash(flash).await;
+        let mut size = via(ViaCommand::DynamicKeymapMacroGetBufferSize);
+        size[1..3].copy_from_slice(&(SPACE as u16).to_be_bytes());
+        keyboard.host_exchange(via(ViaCommand::DynamicKeymapMacroGetBufferSize), size);
+        let mut data = vec![b'a'; MACRO_MAX_SIZE];
+        data.resize(SPACE, 0);
+        save_macro_buffer(&mut keyboard, &data);
+        keyboard.tap(0, 0, 10);
+        for _ in 0..MACRO_MAX_SIZE {
+            keyboard.expect_keys([HidKeyCode::A]).expect_keys([]);
+        }
+        keyboard.expect_keys([]).run().await;
+    });
+}
+
+/// Three macros of `TAPS` taps do not fit the view: slot 2 is shown empty. A
+/// save that sends it back empty leaves it alone; one that fills it writes it.
+#[cfg(feature = "storage")]
+#[test]
+fn a_slot_vial_could_not_show_changes_only_when_filled() {
+    // Two macros of `3 * TAPS + 1` bytes fit the view, a third does not.
+    const TAPS: usize = (MACRO_MAX_NUM + MACRO_MAX_SIZE).div_ceil(9);
+    test_block_on(async {
+        const TAP_A: MacroOp = MacroOp::Tap(Action::Key(KeyCode::Hid(HidKeyCode::A)));
+        const BIG: &[MacroOp] = &[TAP_A; TAPS];
+        let flash = crate::simulator::Flash::new();
+        let mut keyboard = SimKeyboard::builder([[[macros!(0), macros!(1), macros!(2)]]])
+            .behavior_config(BehaviorConfig {
+                keyboard_macros: &[BIG; 3],
+                ..Default::default()
+            })
+            .build_with_flash(flash.clone())
+            .await;
+        keyboard.run().await;
+        let before = flash.writes();
+        // vial-gui reads the view, then saves it back: slots 0 and 1 as rendered,
+        // slot 2 and the rest empty because the view could not fit them.
+        let mut first_page = [0x01, 0x01, 0x04].repeat(10);
+        first_page.truncate(28);
+        keyboard.host_exchange(
+            macro_buffer(ViaCommand::DynamicKeymapMacroGetBuffer, 0, &[0; 28]),
+            macro_buffer(ViaCommand::DynamicKeymapMacroGetBuffer, 0, &first_page),
+        );
+        let mut shown = Vec::new();
+        for _ in 0..2 {
+            shown.extend([0x01, 0x01, 0x04].repeat(TAPS));
+            shown.push(0);
+        }
+        let mut data = shown.clone();
+        data.resize(shown.len() + MACRO_MAX_NUM - 2, 0);
+        save_macro_buffer(&mut keyboard, &data);
+        keyboard.run().await;
+        assert_eq!(flash.writes(), before, "nothing changed, so nothing is written");
+        keyboard.tap(0, 2, 10);
+        for _ in 0..TAPS {
+            keyboard.expect_keys([HidKeyCode::A]).expect_keys([]);
+        }
+        keyboard.run().await;
+
+        // Slot 2 becomes `tap B`.
+        let mut data = shown;
+        data.extend([0x01, 0x01, 0x05, 0x00]);
+        data.resize(data.len() + MACRO_MAX_NUM - 3, 0);
+        save_macro_buffer(&mut keyboard, &data);
+        keyboard
+            .tap(0, 2, 10)
+            .expect_keys([HidKeyCode::B])
             .expect_keys([])
             .run()
             .await;

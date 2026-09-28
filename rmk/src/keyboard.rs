@@ -4,10 +4,11 @@ use embassy_futures::yield_now;
 #[cfg(feature = "_ble")]
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer, with_deadline};
-use heapless::Vec;
+use heapless::{Deque, Vec};
 use rmk_types::action::{Action, KeyAction, KeyboardAction};
 use rmk_types::fork::StateBits;
-use rmk_types::keycode::{ConsumerKey, HidKeyCode, KeyCode, SpecialKey, SystemControlKey};
+use rmk_types::keyboard_macros::MacroOp;
+use rmk_types::keycode::{ConsumerKey, HidKeyCode, KeyCode, SpecialKey, SystemControlKey, from_ascii};
 use rmk_types::led_indicator::LedIndicator;
 use rmk_types::modifier::ModifierCombination;
 use rmk_types::morse::{MorseMode, MorsePattern, TAP};
@@ -29,9 +30,8 @@ use crate::keyboard::fork::ActiveFork;
 use crate::keyboard::held_buffer::{HeldBuffer, HeldKey, KeyState};
 use crate::keyboard::mouse::{MouseAction, MouseState};
 use crate::keyboard::oneshot::OneShotState;
-use crate::keyboard_macros::MacroOperation;
 use crate::keymap::KeyMap;
-use crate::{COMBO_MAX_NUM, FORK_MAX_NUM, MACRO_SPACE_SIZE, boot};
+use crate::{COMBO_MAX_NUM, FORK_MAX_NUM, boot};
 
 pub(crate) mod auto_mouse_layer;
 pub mod combo;
@@ -153,11 +153,6 @@ impl Runnable for Keyboard<'_> {
                 Some(event) => self.process_inner(event).await,
                 None => self.fire_expired().await,
             }
-
-            // Run any macros triggered while handling the event.
-            while let Ok(macro_idx) = crate::channel::MACRO_TRIGGER_CHANNEL.try_receive() {
-                self.execute_macro(macro_idx).await;
-            }
         }
     }
 }
@@ -207,9 +202,10 @@ pub struct Keyboard<'a> {
     /// Caps Word state machine
     caps_word: CapsWordState,
 
-    /// Macro text typing state (affects the effective modifiers)
-    macro_texting: bool,
-    macro_caps: bool,
+    /// Macro ops waiting to run, front first.
+    macro_ops: Deque<MacroOp, { 2 * crate::MACRO_MAX_SIZE }>,
+    /// When the front macro op may run.
+    macro_due: Instant,
 
     /// The real state before fork activations is stored here
     fork_states: [Option<ActiveFork>; FORK_MAX_NUM], // chosen replacement key of the currently triggered forks and the related modifier suppression
@@ -252,8 +248,8 @@ impl<'a> Keyboard<'a> {
             #[cfg(feature = "_ble")]
             user_hold: None,
             caps_word: CapsWordState::default(),
-            macro_texting: false,
-            macro_caps: false,
+            macro_ops: Deque::new(),
+            macro_due: Instant::from_ticks(0),
             fork_states: [None; FORK_MAX_NUM],
             fork_keep_mask: ModifierCombination::default(),
             held_buffer: HeldBuffer::new(),
@@ -311,6 +307,7 @@ impl<'a> Keyboard<'a> {
             self.user_hold.map(|(at, _)| at),
             buffered,
             self.mouse.next_deadline(),
+            (!self.macro_ops.is_empty()).then_some(self.macro_due),
         ]
         .into_iter()
         .flatten()
@@ -329,6 +326,7 @@ impl<'a> Keyboard<'a> {
         #[cfg(feature = "_ble")]
         self.fire_user_hold().await;
         self.fire_mouse_repeat().await;
+        self.fire_macro().await;
     }
 
     /// Resolve `key` if its timeout has passed: dispatch the combo it waits on, or
@@ -1280,10 +1278,25 @@ impl<'a> Keyboard<'a> {
                 self.send_keyboard_report_with_resolved_modifiers(event.pressed).await;
                 self.update_osl(event);
             }
-            Action::TriggerMacro(macro_idx) => {
-                // Macros are fired on press.
-                if event.pressed && crate::channel::MACRO_TRIGGER_CHANNEL.try_send(macro_idx).is_err() {
-                    warn!("Macro trigger queue full, dropped macro {}", macro_idx);
+            Action::TriggerMacro(idx) => {
+                // Without a `PauseForRelease` the press queues the whole macro; with one,
+                // the press queues the ops before it and the release the ops after it.
+                if let Ok(macro_ops) = self.keymap.read_macro(idx).await {
+                    let mut halves = macro_ops.split(|op| *op == MacroOp::PauseForRelease);
+                    let current_half = if event.pressed { halves.next() } else { halves.nth(1) };
+                    if let Some(half) = current_half.filter(|half| !half.is_empty()) {
+                        // The release half starts 20ms late so it doesn't toggle the host's IME.
+                        let wait = (!event.pressed).then_some(MacroOp::Delay(20));
+                        if self.macro_ops.capacity() - self.macro_ops.len() < half.len() + wait.iter().len() {
+                            warn!("Macro queue full, dropped macro {}", idx);
+                        } else {
+                            self.macro_ops.extend(wait.into_iter().chain(half.iter().copied()));
+                        }
+                    }
+                } else {
+                    // Flash may hold a macro the user wrote over this slot's default,
+                    // so running the default instead would be the wrong macro.
+                    error!("Failed to read macro {}, skipped", idx);
                 }
             }
             Action::KeyWithModifier(key_code, modifiers) => self.process_action_key(key_code, modifiers, event).await,
@@ -1378,22 +1391,11 @@ impl<'a> Keyboard<'a> {
     }
 
     /// Calculates the combined effect of all modifiers:
-    /// - text macro related modifier suppressions + capitalization
     /// - registered (held) modifiers keys
     /// - one-shot modifiers
     /// - `KeyWithModifier` modifiers, until the next press
     /// - possible fork related modifier suppressions
     pub fn resolve_modifiers(&mut self, pressed: bool) -> ModifierCombination {
-        // Text typing macro should not be affected by any modifiers,
-        // only its own capitalization
-        if self.macro_texting {
-            if self.macro_caps {
-                return ModifierCombination::new().with_left_shift(true);
-            } else {
-                return ModifierCombination::new();
-            }
-        }
-
         // "explicit" modifiers: one-shot modifier, registered held modifiers:
         let mut result = self.resolve_explicit_modifiers(pressed);
 
@@ -1721,136 +1723,66 @@ impl<'a> Keyboard<'a> {
         }
     }
 
-    async fn execute_macro(&mut self, macro_idx: u8) {
-        // Every op registers under the macro's own identity, never the trigger key's.
-        let event = KeyboardEvent {
+    /// Run the macro op that is due. One op per call, so `run()` handles a queued
+    /// key event before the next op: the macro and the user's keys interleave.
+    async fn fire_macro(&mut self) {
+        if self.macro_due > Instant::now() {
+            return;
+        }
+        let Some(op) = self.macro_ops.pop_front() else {
+            return;
+        };
+        // Every op registers under the macro identity, never the trigger key's.
+        let press = KeyboardEvent {
             pos: KeyboardEventPos::Macro,
             pressed: true,
         };
         let release = KeyboardEvent {
             pressed: false,
-            ..event
+            ..press
         };
-        // Read macro operations until the end of the macro
-        if let Some(macro_start_idx) = self.keymap.get_macro_sequence_start(macro_idx) {
-            let mut offset = 0;
-            loop {
-                // First, get the next macro operation
-                let (operation, new_offset) = self.keymap.get_next_macro_operation(macro_start_idx, offset);
-                // Execute the operation
-                match operation {
-                    MacroOperation::Press(k) => {
-                        self.macro_texting = false;
-                        self.register_key(k, ModifierCombination::new(), event);
-                        self.send_keyboard_report_with_resolved_modifiers(true).await;
-                    }
-                    MacroOperation::Release(k) => {
-                        self.macro_texting = false;
-                        self.unregister_key(k, ModifierCombination::new(), release);
-                        self.send_keyboard_report_with_resolved_modifiers(false).await;
-                    }
-                    MacroOperation::Tap(k) => {
-                        self.macro_texting = false;
-                        self.register_key(k, ModifierCombination::new(), event);
-                        self.send_keyboard_report_with_resolved_modifiers(true).await;
-                        embassy_time::Timer::after_millis(2).await;
-                        self.unregister_key(k, ModifierCombination::new(), release);
-                        self.send_keyboard_report_with_resolved_modifiers(false).await;
-                    }
-                    // A macro can't trigger another macro: that would re-enter this queue, and a
-                    // self- or cycle-triggering macro would loop here forever. Drop it at the source.
-                    #[cfg(feature = "vial")]
-                    MacroOperation::PressAction(Action::TriggerMacro(_))
-                    | MacroOperation::ReleaseAction(Action::TriggerMacro(_))
-                    | MacroOperation::TapAction(Action::TriggerMacro(_)) => {
-                        warn!("A macro cannot trigger another macro");
-                    }
-                    // Extended (16-bit) keycodes (BT profile, PDF, ...) run the decoded action
-                    // through the normal dispatcher, with press/release synthesized from the event.
-                    #[cfg(feature = "vial")]
-                    MacroOperation::PressAction(action) => {
-                        self.macro_texting = false;
-                        self.process_key_action_normal(action, KeyboardEvent { pressed: true, ..event })
-                            .await;
-                    }
-                    #[cfg(feature = "vial")]
-                    MacroOperation::ReleaseAction(action) => {
-                        self.macro_texting = false;
-                        self.process_key_action_normal(
-                            action,
-                            KeyboardEvent {
-                                pressed: false,
-                                ..event
-                            },
-                        )
-                        .await;
-                    }
-                    #[cfg(feature = "vial")]
-                    MacroOperation::TapAction(action) => {
-                        self.macro_texting = false;
-                        self.process_key_action_normal(action, KeyboardEvent { pressed: true, ..event })
-                            .await;
-                        embassy_time::Timer::after_millis(2).await;
-                        self.process_key_action_normal(
-                            action,
-                            KeyboardEvent {
-                                pressed: false,
-                                ..event
-                            },
-                        )
-                        .await;
-                    }
-                    MacroOperation::Text(k, is_cap) => {
-                        self.macro_texting = true;
-                        self.macro_caps = is_cap;
-                        if is_cap {
-                            self.send_keyboard_report_with_resolved_modifiers(true).await;
-                            embassy_time::Timer::after_millis(12).await;
-                        }
-                        self.register_key(k, ModifierCombination::new(), event);
-                        self.send_keyboard_report_with_resolved_modifiers(true).await;
-                        embassy_time::Timer::after_millis(12).await;
-                        self.unregister_key(k, ModifierCombination::new(), release);
-                        self.send_keyboard_report_with_resolved_modifiers(false).await;
-                        if is_cap {
-                            self.macro_caps = false;
-                            embassy_time::Timer::after_millis(12).await;
-                            self.send_keyboard_report_with_resolved_modifiers(false).await;
-                        }
-                    }
-                    MacroOperation::Delay(t) => {
-                        embassy_time::Timer::after_millis(t as u64).await;
-                    }
-                    MacroOperation::End => {
-                        if self.macro_texting {
-                            // Restore held modifiers after text typing stops suppressing them.
-                            self.macro_texting = false;
-                            self.send_keyboard_report_with_resolved_modifiers(false).await;
-                        }
-                        break;
-                    }
-                };
-
-                offset = new_offset;
-                if offset > MACRO_SPACE_SIZE {
-                    break;
+        match op {
+            // Held for the same 10ms as a tap-hold's tap.
+            MacroOp::Tap(action) => self.process_key_action_tap(action, press).await,
+            MacroOp::Press(action) => self.process_key_action_normal(action, press).await,
+            MacroOp::Release(action) => self.process_key_action_normal(action, release).await,
+            // Two reports whose modifiers are the character's own shift and nothing
+            // else, so held modifiers never change what a text macro types.
+            MacroOp::Char(c) => {
+                let (key, shift) = from_ascii(c);
+                let modifiers = ModifierCombination::new().with_left_shift(shift);
+                self.register_key(key, ModifierCombination::new(), press);
+                self.send_keyboard_report(modifiers).await;
+                Timer::after_millis(10).await;
+                self.unregister_key(key, ModifierCombination::new(), release);
+                self.send_keyboard_report(modifiers).await;
+                // The text ends here: give the next op, even a mouse click, the real modifiers.
+                if !matches!(self.macro_ops.front(), Some(MacroOp::Char(_))) {
+                    self.send_keyboard_report_with_resolved_modifiers(false).await;
                 }
-                embassy_time::Timer::after_millis(1).await;
+                if shift {
+                    self.macro_due = Instant::now() + Duration::from_millis(10);
+                }
             }
-        } else {
-            error!("Macro not found");
+            MacroOp::Delay(ms) => self.macro_due = Instant::now() + Duration::from_millis(ms as u64),
+            // Never queued: the halves are split at it.
+            MacroOp::PauseForRelease => {}
         }
     }
 
-    /// Build the keyboard report for the current held keycodes with modifiers
-    /// resolved.
+    /// Send the keyboard report with resolved modifiers to the host.
+    pub(crate) async fn send_keyboard_report_with_resolved_modifiers(&mut self, pressed: bool) {
+        let modifiers = self.resolve_modifiers(pressed);
+        self.send_keyboard_report(modifiers).await;
+    }
+
+    /// Send the keyboard report for the held keycodes with exactly `modifiers`.
     ///
     /// Multiple slots can hold the same HID usage, but the host only tracks
     /// each usage as up or down, so duplicates are collapsed to the first slot
     /// that holds them. This keeps the shared usage down until the last holder
     /// releases it.
-    pub(crate) fn build_keyboard_report(&mut self, pressed: bool) -> KeyboardReport {
-        let modifiers = self.resolve_modifiers(pressed);
+    async fn send_keyboard_report(&mut self, modifiers: ModifierCombination) {
         let mut keycodes = [0u8; 6];
         let mut n = 0;
         for k in self.registered.iter().filter(|k| k.keycode != HidKeyCode::No) {
@@ -1864,17 +1796,12 @@ impl<'a> Keyboard<'a> {
             "Sending keyboard report, modifiers: {:?}, keycodes: {:?}",
             modifiers, keycodes
         );
-        KeyboardReport {
+        let report = KeyboardReport {
             modifier: modifiers.into_bits(),
             reserved: 0,
             leds: LOCK_LED_STATES.load(core::sync::atomic::Ordering::Relaxed),
             keycodes,
-        }
-    }
-
-    /// Send the keyboard report with resolved modifiers to the host.
-    pub(crate) async fn send_keyboard_report_with_resolved_modifiers(&mut self, pressed: bool) {
-        let report = self.build_keyboard_report(pressed);
+        };
         self.send_report(Report::KeyboardReport(report)).await;
 
         // Yield once after sending the report to channel
