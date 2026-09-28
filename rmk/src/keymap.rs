@@ -189,6 +189,7 @@ impl KeyMapInner<'_> {
                 }
                 KeyAction::No
             }
+            KeyboardEventPos::Combo(_) | KeyboardEventPos::Macro | KeyboardEventPos::Virtual(_) => KeyAction::No,
         }
     }
 
@@ -216,6 +217,7 @@ impl KeyMapInner<'_> {
                     }
                 }
             }
+            KeyboardEventPos::Combo(_) | KeyboardEventPos::Macro | KeyboardEventPos::Virtual(_) => {}
         }
     }
 
@@ -275,6 +277,9 @@ impl KeyMapInner<'_> {
                 }
                 self.behavior.default_layer
             }
+            KeyboardEventPos::Combo(_) | KeyboardEventPos::Macro | KeyboardEventPos::Virtual(_) => {
+                self.behavior.default_layer
+            }
         }
     }
 
@@ -294,6 +299,7 @@ impl KeyMapInner<'_> {
                     }
                 }
             }
+            KeyboardEventPos::Combo(_) | KeyboardEventPos::Macro | KeyboardEventPos::Virtual(_) => {}
         }
     }
 
