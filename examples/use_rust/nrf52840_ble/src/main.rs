@@ -22,7 +22,7 @@ use nrf_mpsl::Flash;
 use nrf_sdc::mpsl::MultiprotocolServiceLayer;
 use nrf_sdc::{self as sdc, mpsl};
 use panic_probe as _;
-use rmk::ble::{BleTransport, build_ble_stack};
+use rmk::ble::BleTransport;
 use rmk::config::{
     BehaviorConfig, BleBatteryConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig,
 };
@@ -36,7 +36,7 @@ use rmk::matrix::Matrix;
 use rmk::processor::builtin::wpm::WpmProcessor;
 use rmk::usb::UsbTransport;
 use rmk::watchdog::Nrf52Watchdog;
-use rmk::{HostResources, KeymapData, initialize_keymap_and_storage, run_all};
+use rmk::{KeymapData, initialize_keymap_and_storage, run_all};
 use static_cell::StaticCell;
 use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
 
@@ -116,7 +116,8 @@ async fn main(spawner: Spawner) {
         source: mpsl::raw::MPSL_CLOCK_LF_SRC_RC as u8,
         rc_ctiv: mpsl::raw::MPSL_RECOMMENDED_RC_CTIV as u8,
         rc_temp_ctiv: mpsl::raw::MPSL_RECOMMENDED_RC_TEMP_CTIV as u8,
-        accuracy_ppm: mpsl::raw::MPSL_DEFAULT_CLOCK_ACCURACY_PPM as u16,
+
+        accuracy_ppm: 500,
         skip_wait_lfclk_started: mpsl::raw::MPSL_DEFAULT_SKIP_WAIT_LFCLK_STARTED != 0,
     };
     static MPSL: StaticCell<MultiprotocolServiceLayer> = StaticCell::new();
@@ -135,8 +136,6 @@ async fn main(spawner: Spawner) {
     let mut rng = rng::Rng::new(p.RNG, Irqs);
     let mut sdc_mem = sdc::Mem::<4696>::new();
     let sdc = unwrap!(build_sdc(sdc_p, &mut rng, mpsl, &mut sdc_mem));
-    let mut host_resources = HostResources::new();
-    let stack = build_ble_stack(sdc, ble_addr(), &mut host_resources).await;
 
     // Initialize usb driver
     let driver = Driver::new(p.USBD, Irqs, HardwareVbusDetect::new(Irqs));
@@ -196,8 +195,7 @@ async fn main(spawner: Spawner) {
     let mut matrix = Matrix::<_, _, _, ROW, COL, true>::new(row_pins, col_pins, debouncer);
     // let mut matrix = TestMatrix::<ROW, COL>::new();
     let mut keyboard = Keyboard::new(&keymap);
-    let host_ctx = rmk::host::KeyboardContext::new(&keymap);
-    let mut host_service = HostService::new(&host_ctx, &rmk_config);
+    let host_service = HostService::new(&keymap, &rmk_config);
 
     // Initialize the encoder
     let pin_a = Input::new(p.P1_06, embassy_nrf::gpio::Pull::None);
@@ -213,8 +211,8 @@ async fn main(spawner: Spawner) {
     );
     let mut batt_proc = BatteryProcessor::new(2000, 2806);
 
-    let mut usb_transport = UsbTransport::new(driver, rmk_config.device_config);
-    let mut ble_transport = BleTransport::new(&stack, rmk_config).await;
+    let mut usb_transport = UsbTransport::new(driver, rmk_config.device_config).with_host_service(&host_service);
+    let mut ble_transport = BleTransport::new(sdc, ble_addr(), rmk_config).with_host_service(&host_service);
     let mut wpm_processor = WpmProcessor::new();
 
     let mut watchdog_runner = Nrf52Watchdog::default_runner(p.WDT);
@@ -229,7 +227,6 @@ async fn main(spawner: Spawner) {
         wpm_processor,
         batt_proc,
         keyboard,
-        host_service,
         watchdog_runner
     )
     .await;

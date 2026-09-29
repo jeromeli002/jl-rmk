@@ -27,6 +27,19 @@ pub(crate) fn current_usb_state() -> UsbState {
     CONNECTION_STATUS.lock(|c| c.get().usb)
 }
 
+/// Current central sleep state for host polling. Sourced from the BLE sleep
+/// manager's `SLEEPING_STATE`; always `false` in builds without BLE.
+pub(crate) fn current_sleep_state() -> bool {
+    #[cfg(feature = "_ble")]
+    {
+        crate::ble::sleep::SLEEPING_STATE.load(core::sync::atomic::Ordering::Acquire)
+    }
+    #[cfg(not(feature = "_ble"))]
+    {
+        false
+    }
+}
+
 #[cfg(feature = "_ble")]
 pub(crate) fn current_ble_status() -> BleStatus {
     CONNECTION_STATUS.lock(|c| c.get().ble)
@@ -79,8 +92,8 @@ pub(crate) fn set_ble_profile(profile: u8) {
     });
 }
 
-/// Persistence is the caller's responsibility — enqueue
-/// `FlashOperationMessage::ConnectionType` on `FLASH_CHANNEL`.
+/// Persistence is the caller's responsibility: `storage::store` the new
+/// `ConnectionType`.
 pub(crate) fn set_preferred_connection(t: ConnectionType) {
     update_status(|c| c.preferred = t);
 }
@@ -92,15 +105,15 @@ pub(crate) fn set_preferred_connection(t: ConnectionType) {
 #[cfg(feature = "_ble")]
 pub(crate) async fn load_preferred_connection() -> ConnectionType {
     #[cfg(feature = "storage")]
-    let stored = crate::storage::read_connection_type().await;
-    #[cfg(not(feature = "storage"))]
-    let stored: Option<ConnectionType> = None;
-    match stored {
-        Some(c) => c,
-        #[cfg(feature = "_no_usb")]
-        None => ConnectionType::Ble,
-        #[cfg(not(feature = "_no_usb"))]
-        None => ConnectionType::Usb,
+    if let Ok(Some(crate::storage::StorageValue::ConnectionType(c))) =
+        crate::storage::read(crate::storage::StorageKey::ConnectionType).await
+    {
+        return c;
+    }
+    if cfg!(feature = "_no_usb") {
+        ConnectionType::Ble
+    } else {
+        ConnectionType::Usb
     }
 }
 
@@ -116,9 +129,7 @@ pub(crate) async fn toggle_preferred() {
     });
     info!("Switching preferred transport to: {:?}", new);
     #[cfg(feature = "storage")]
-    crate::channel::FLASH_CHANNEL
-        .send(crate::storage::FlashOperationMessage::ConnectionType(new))
-        .await;
+    crate::storage::store_unchecked(crate::storage::StorageItem::ConnectionType(new)).await;
 }
 
 #[cfg(feature = "_ble")]

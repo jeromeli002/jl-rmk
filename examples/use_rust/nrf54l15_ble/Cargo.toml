@@ -3,26 +3,26 @@ name = "rmk-nrf54l15"
 version = "0.1.0"
 authors = ["Haobo Gu <haobogu@outlook.com>"]
 description = "Keyboard firmware written in Rust"
-homepage = "https://github.com/haobogu/rmk"
-repository = "https://github.com/haobogu/rmk"
+homepage = "https://github.com/rmk-rs/rmk"
+repository = "https://github.com/rmk-rs/rmk"
 readme = "../../README.md"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-rmk = { path = "../../../rmk", features = ["async_matrix", "nrf54l15_ble"] }
-nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc", rev = "abe49d22ebfc85fae134eb082fbfddf752016a55", default-features = false, features = [
-     "defmt",
+rmk = { path = "../../../rmk", default-features = false, features = ["defmt", "storage", "vial", "watchdog", "async_matrix", "nrf54l15_ble"] }
+nrf-sdc = { version = "0.4.0", default-features = false, features = [
+    "defmt",
     "peripheral",
     "central",
     "nrf54l15-app-s",
 ] }
-nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "abe49d22ebfc85fae134eb082fbfddf752016a55", default-features = false, features = [
-     "defmt",
+nrf-mpsl = { version = "0.4.0", default-features = false, features = [
+    "defmt",
     "critical-section-impl",
     "nrf54l15-app-s",
 ] }
-bt-hci = { version = "0.9", features = ["defmt"] }
+bt-hci = { version = "0.10", features = ["defmt"] }
 
 cortex-m = "0.7.7"
 cortex-m-rt = "0.7.5"

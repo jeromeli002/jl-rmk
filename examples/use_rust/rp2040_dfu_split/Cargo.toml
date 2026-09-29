@@ -3,8 +3,8 @@ name = "rmk-rp2040-dfu-split"
 version = "0.1.0"
 authors = ["RMK contributors"]
 description = "RMK example: RP2040 split keyboard with embassy-boot and dfu_split"
-homepage = "https://github.com/haobogu/rmk"
-repository = "https://github.com/haobogu/rmk"
+homepage = "https://github.com/rmk-rs/rmk"
+repository = "https://github.com/rmk-rs/rmk"
 readme = "../../README.md"
 edition = "2021"
 license = "MIT OR Apache-2.0"
@@ -14,12 +14,14 @@ rmk = { path = "../../../rmk", features = ["dfu_rp", "split", "dfu_split"] }
 embassy-time = { version = "0.5", features = ["defmt"] }
 embassy-rp = { version = "0.10", features = ["rp2040", "defmt", "time-driver", "critical-section-impl"] }
 embassy-executor = { version = "0.10", features = ["defmt", "platform-cortex-m", "executor-thread"] }
+embassy-sync = { version = "0.8" }
+embassy-embedded-hal = { version = "0.6" }
 cortex-m-rt = { version = "0.7.5", features = ["set-vtor"] }
 static_cell = "2"
-portable-atomic = { version = "1.11", features = ["critical-section"] }
-defmt = "1.0"
-defmt-rtt = "1.0"
-panic-probe = { version = "1.0", features = ["print-defmt"] }
+portable-atomic = { version = "1", features = ["critical-section"] }
+defmt = "1"
+defmt-rtt = "1"
+panic-probe = { version = "1", features = ["print-defmt"] }
 
 [build-dependencies]
 const-gen = "1.6"

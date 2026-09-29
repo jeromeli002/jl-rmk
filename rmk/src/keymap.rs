@@ -16,7 +16,7 @@ use crate::event::{KeyboardEvent, KeyboardEventPos, LayerChangeEvent, publish_ev
 use crate::input_device::rotary_encoder::Direction;
 use crate::keyboard::combo::Combo;
 use crate::keyboard_macros::MacroOperation;
-#[cfg(feature = "host_security")]
+#[cfg(feature = "host_lock")]
 use crate::matrix::MatrixState;
 
 pub(crate) const HOLD_BUFFER_SIZE: usize = 16;
@@ -33,6 +33,8 @@ pub struct KeymapData<const ROW: usize, const COL: usize, const NUM_LAYER: usize
     layer_cache: [[u8; COL]; ROW],
     /// Layer cache for encoder directions
     encoder_layer_cache: [[u8; 2]; NUM_ENCODER],
+    /// VIA/Vial layout options; persisted via `LayoutOption`
+    pub(crate) layout_option: u32,
 }
 
 impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize> KeymapData<ROW, COL, NUM_LAYER, 0> {
@@ -44,6 +46,7 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize> KeymapData<ROW,
             layer_state: [false; NUM_LAYER],
             layer_cache: [[0; COL]; ROW],
             encoder_layer_cache: [],
+            layout_option: 0,
         }
     }
 }
@@ -62,6 +65,7 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCOD
             layer_state: [false; NUM_LAYER],
             layer_cache: [[0; COL]; ROW],
             encoder_layer_cache: [[0u8; 2]; NUM_ENCODER],
+            layout_option: 0,
         }
     }
 }
@@ -102,12 +106,12 @@ struct KeyMapInner<'a> {
     hand: &'a [Hand],
     /// Mouse button state
     mouse_buttons: u8,
+    /// VIA/Vial layout options; persisted via `LayoutOption`
+    layout_option: u32,
     /// Matrix state for vial lock
-    #[cfg(feature = "host_security")]
+    #[cfg(feature = "host_lock")]
     matrix_state: MatrixState,
 }
-
-// ── Flat indexing helpers ──────────────────────────────────────────────
 
 impl KeyMapInner<'_> {
     #[inline]
@@ -131,8 +135,6 @@ impl KeyMapInner<'_> {
     }
 }
 
-// ── KeyMapInner methods (all take &mut self or &self) ─────────────────
-
 impl KeyMapInner<'_> {
     fn get_keymap_config(&self) -> (usize, usize, usize) {
         (self.row, self.col, self.num_layer)
@@ -150,7 +152,14 @@ impl KeyMapInner<'_> {
             );
             return;
         }
+        let before = self.get_activated_layer();
         self.behavior.default_layer = layer_num;
+        let after = self.get_activated_layer();
+        // With no layer key held, the activated layer follows the default; a
+        // held layer masks the change and observers see nothing.
+        if before != after {
+            publish_event(LayerChangeEvent::new(after));
+        }
     }
 
     fn get_action_at(&self, pos: KeyboardEventPos, layer_num: usize) -> KeyAction {
@@ -158,6 +167,11 @@ impl KeyMapInner<'_> {
             KeyboardEventPos::Key(key_pos) => {
                 let row = key_pos.row as usize;
                 let col = key_pos.col as usize;
+                if row >= self.row || col >= self.col || layer_num >= self.num_layer {
+                    // Positions may come from remote split peers; never panic on them.
+                    warn!("Key position ({}, {}) out of range on layer {}", row, col, layer_num);
+                    return KeyAction::No;
+                }
                 self.layers[self.layer_index(layer_num, row, col)]
             }
             KeyboardEventPos::RotaryEncoder(encoder_pos) => {
@@ -175,6 +189,7 @@ impl KeyMapInner<'_> {
                 }
                 KeyAction::No
             }
+            KeyboardEventPos::Combo(_) | KeyboardEventPos::Macro | KeyboardEventPos::Virtual(_) => KeyAction::No,
         }
     }
 
@@ -183,6 +198,10 @@ impl KeyMapInner<'_> {
             KeyboardEventPos::Key(key_pos) => {
                 let row = key_pos.row as usize;
                 let col = key_pos.col as usize;
+                if row >= self.row || col >= self.col || layer_num >= self.num_layer {
+                    warn!("Key position ({}, {}) out of range on layer {}", row, col, layer_num);
+                    return;
+                }
                 let idx = self.layer_index(layer_num, row, col);
                 self.layers[idx] = action;
             }
@@ -198,6 +217,7 @@ impl KeyMapInner<'_> {
                     }
                 }
             }
+            KeyboardEventPos::Combo(_) | KeyboardEventPos::Macro | KeyboardEventPos::Virtual(_) => {}
         }
     }
 
@@ -221,6 +241,8 @@ impl KeyMapInner<'_> {
             }
         }
 
+        // Keep release on the same transparent default-layer action as press.
+        self.save_layer_cache(event.pos, self.behavior.default_layer);
         KeyAction::No
     }
 
@@ -236,12 +258,13 @@ impl KeyMapInner<'_> {
     fn pop_layer_from_cache(&mut self, pos: KeyboardEventPos) -> u8 {
         match pos {
             KeyboardEventPos::Key(key_pos) => {
-                let row = key_pos.row as usize;
-                let col = key_pos.col as usize;
-                let ci = self.cache_index(row, col);
-                let layer = self.layer_cache[ci];
-                self.layer_cache[ci] = self.behavior.default_layer;
-                layer
+                let ci = self.cache_index(key_pos.row as usize, key_pos.col as usize);
+                if let Some(cache) = self.layer_cache.get_mut(ci) {
+                    let layer = *cache;
+                    *cache = self.behavior.default_layer;
+                    return layer;
+                }
+                self.behavior.default_layer
             }
             KeyboardEventPos::RotaryEncoder(encoder_pos) => {
                 if encoder_pos.direction != Direction::None {
@@ -254,16 +277,19 @@ impl KeyMapInner<'_> {
                 }
                 self.behavior.default_layer
             }
+            KeyboardEventPos::Combo(_) | KeyboardEventPos::Macro | KeyboardEventPos::Virtual(_) => {
+                self.behavior.default_layer
+            }
         }
     }
 
     fn save_layer_cache(&mut self, pos: KeyboardEventPos, layer_num: u8) {
         match pos {
             KeyboardEventPos::Key(key_pos) => {
-                let row = key_pos.row as usize;
-                let col = key_pos.col as usize;
-                let ci = self.cache_index(row, col);
-                self.layer_cache[ci] = layer_num;
+                let ci = self.cache_index(key_pos.row as usize, key_pos.col as usize);
+                if let Some(cache) = self.layer_cache.get_mut(ci) {
+                    *cache = layer_num;
+                }
             }
             KeyboardEventPos::RotaryEncoder(encoder_pos) => {
                 if encoder_pos.direction != Direction::None {
@@ -273,6 +299,7 @@ impl KeyMapInner<'_> {
                     }
                 }
             }
+            KeyboardEventPos::Combo(_) | KeyboardEventPos::Macro | KeyboardEventPos::Virtual(_) => {}
         }
     }
 
@@ -330,7 +357,7 @@ impl KeyMapInner<'_> {
     }
 }
 
-// ── Public KeyMap API (interior borrow hidden) ────────────────────────
+// Keep `inner` borrows inside sync methods so no borrow crosses an await.
 
 impl<'a> KeyMap<'a> {
     /// Flatten [`KeymapData`] and build the `KeyMap`.
@@ -367,7 +394,8 @@ impl<'a> KeyMap<'a> {
                 behavior,
                 hand,
                 mouse_buttons: 0,
-                #[cfg(feature = "host_security")]
+                layout_option: data.layout_option,
+                #[cfg(feature = "host_lock")]
                 matrix_state: MatrixState::new(ROW, COL),
             }),
         }
@@ -401,31 +429,19 @@ impl<'a> KeyMap<'a> {
         fill_vec(&mut behavior.morse.morses);
 
         // Read from storage BEFORE flattening (storage expects typed arrays).
-        if let Some(storage) = storage
-            && {
-                Ok(())
-                    .and(storage.read_keymap(data, behavior).await)
-                    .and(storage.read_behavior_config(behavior).await)
-                    .and(
-                        storage
-                            .read_macro_cache(&mut behavior.keyboard_macros.macro_sequences)
-                            .await,
-                    )
-                    .and(storage.read_combos(&mut behavior.combo.combos).await)
-                    .and(storage.read_forks(&mut behavior.fork.forks).await)
-                    .and(storage.read_morses(&mut behavior.morse.morses).await)
+        if let Some(storage) = storage {
+            if storage.clear_layout {
+                debug!("`clear_layout` is set, rewriting the items the compiled-in layout owns.");
+                storage.write_layout(data, behavior).await;
+            } else if storage.read_keymap(data, behavior).await.is_err() {
+                error!("Failed to read from storage, clearing...");
+                storage.flash.erase_all().await.ok();
+                reboot_keyboard();
             }
-            .is_err()
-        {
-            error!("Failed to read from storage, clearing...");
-            storage.flash.erase_all().await.ok();
-            reboot_keyboard();
         }
 
         Self::build(data, behavior, positional_config)
     }
-
-    // ── Action resolution ──
 
     pub(crate) fn get_action_with_layer_cache(&self, event: KeyboardEvent) -> KeyAction {
         self.inner.borrow_mut().get_action_with_layer_cache(event)
@@ -455,8 +471,6 @@ impl<'a> KeyMap<'a> {
     pub(crate) fn set_action_at(&self, pos: KeyboardEventPos, layer: usize, action: KeyAction) {
         self.inner.borrow_mut().set_action_at(pos, layer, action);
     }
-
-    // ── Layers ──
 
     pub(crate) fn activate_layer(&self, layer_num: u8) {
         self.inner.borrow_mut().activate_layer(layer_num);
@@ -533,11 +547,24 @@ impl<'a> KeyMap<'a> {
         self.inner.borrow_mut().set_default_layer(layer_num);
     }
 
+    pub(crate) fn layout_option(&self) -> u32 {
+        self.inner.borrow().layout_option
+    }
+
+    pub(crate) fn set_layout_option(&self, layout_option: u32) {
+        self.inner.borrow_mut().layout_option = layout_option;
+    }
+
+    /// The behavior config as one storage item; taken after a RAM change so the
+    /// next writer's snapshot includes it.
+    #[cfg(feature = "storage")]
+    pub(crate) fn behavior_snapshot(&self) -> crate::storage::BehaviorConfig {
+        (&*self.inner.borrow().behavior).into()
+    }
+
     pub(crate) fn update_fn_layer_state(&self) {
         self.inner.borrow_mut().update_fn_layer_state();
     }
-
-    // ── Config ──
 
     pub(crate) fn get_keymap_config(&self) -> (usize, usize, usize) {
         self.inner.borrow().get_keymap_config()
@@ -552,8 +579,6 @@ impl<'a> KeyMap<'a> {
             Hand::Unknown
         }
     }
-
-    // ── Behavior getters (borrow scoped inside each method) ──
 
     pub(crate) fn combo_timeout(&self) -> Duration {
         self.inner.borrow().behavior.combo.timeout
@@ -591,6 +616,20 @@ impl<'a> KeyMap<'a> {
         self.inner.borrow().behavior.morse.default_profile
     }
 
+    /// Resolve a per-key morse profile by its table index: the table entry if
+    /// present, otherwise the user-configured default profile. Fields left
+    /// `None` by the resolved profile are still filled in per-field by the
+    /// callers (default profile, then hardcoded fallbacks).
+    pub(crate) fn morse_profile(&self, idx: u8) -> MorseProfile {
+        let inner = self.inner.borrow();
+        let morse = &inner.behavior.morse;
+        morse
+            .profiles
+            .get(idx as usize)
+            .copied()
+            .unwrap_or(morse.default_profile)
+    }
+
     pub(crate) fn mouse_key_config(&self) -> MouseKeyConfig {
         self.inner.borrow().behavior.mouse_key
     }
@@ -602,8 +641,6 @@ impl<'a> KeyMap<'a> {
     pub(crate) fn morses_len(&self) -> usize {
         self.inner.borrow().behavior.morse.morses.len()
     }
-
-    // ── Behavior setters ──
 
     pub(crate) fn set_combo_timeout(&self, timeout: Duration) {
         self.inner.borrow_mut().behavior.combo.timeout = timeout;
@@ -629,8 +666,6 @@ impl<'a> KeyMap<'a> {
         self.inner.borrow_mut().behavior.morse.prior_idle_time = time;
     }
 
-    // ── Per-element morse ──
-
     pub(crate) fn get_morse(&self, idx: usize) -> Option<Morse> {
         self.inner.borrow().behavior.morse.morses.get(idx).cloned()
     }
@@ -639,11 +674,14 @@ impl<'a> KeyMap<'a> {
         self.inner.borrow_mut().behavior.morse.morses.get_mut(idx).map(f)
     }
 
-    // ── Collection closures ──
-
     pub(crate) fn with_forks<R>(&self, f: impl FnOnce(&[Fork]) -> R) -> R {
         let inner = self.inner.borrow();
         f(&inner.behavior.fork.forks)
+    }
+
+    pub(crate) fn with_forks_mut<R>(&self, f: impl FnOnce(&mut [Fork]) -> R) -> R {
+        let mut inner = self.inner.borrow_mut();
+        f(&mut inner.behavior.fork.forks)
     }
 
     pub(crate) fn with_combos<R>(&self, f: impl FnOnce(&[Option<Combo>]) -> R) -> R {
@@ -655,8 +693,6 @@ impl<'a> KeyMap<'a> {
         let mut inner = self.inner.borrow_mut();
         f(&mut inner.behavior.combo.combos)
     }
-
-    // ── Macros ──
 
     pub(crate) fn get_macro_sequence_start(&self, idx: u8) -> Option<usize> {
         MacroOperation::get_macro_sequence_start(&self.inner.borrow().behavior.keyboard_macros.macro_sequences, idx)
@@ -670,8 +706,6 @@ impl<'a> KeyMap<'a> {
         )
     }
 
-    // ── Mouse ──
-
     pub(crate) fn mouse_buttons(&self) -> u8 {
         self.inner.borrow().mouse_buttons
     }
@@ -679,8 +713,6 @@ impl<'a> KeyMap<'a> {
     pub(crate) fn set_mouse_buttons(&self, buttons: u8) {
         self.inner.borrow_mut().mouse_buttons = buttons;
     }
-
-    // ── Bulk flat access (for Vial DynamicKeymapGetBuffer/SetBuffer) ──
 
     pub(crate) fn get_action_by_flat_index(&self, index: usize) -> KeyAction {
         let inner = self.inner.borrow();
@@ -691,14 +723,9 @@ impl<'a> KeyMap<'a> {
         }
     }
 
-    pub(crate) fn set_action_by_flat_index(&self, index: usize, action: KeyAction) {
-        let mut inner = self.inner.borrow_mut();
-        if index < inner.layers.len() {
-            inner.layers[index] = action;
-        }
+    pub(crate) fn num_encoders(&self) -> usize {
+        self.inner.borrow().num_encoder
     }
-
-    // ── Encoder access (for Vial GetEncoder/SetEncoder) ──
 
     pub(crate) fn get_encoder_action(&self, layer: usize, id: usize) -> Option<EncoderAction> {
         let inner = self.inner.borrow();
@@ -737,7 +764,19 @@ impl<'a> KeyMap<'a> {
         None
     }
 
-    // ── Macro buffer (for Vial DynamicKeymapMacroGetBuffer/SetBuffer) ──
+    /// Write both directions of an encoder under one borrow. Returns `false`
+    /// if the slot is out of range.
+    pub(crate) fn set_encoder(&self, layer: usize, id: usize, action: EncoderAction) -> bool {
+        let mut inner = self.inner.borrow_mut();
+        let idx = inner.encoder_index(layer, id);
+        if let Some(encoders) = &mut inner.encoders
+            && let Some(slot) = encoders.get_mut(idx)
+        {
+            *slot = action;
+            return true;
+        }
+        false
+    }
 
     pub(crate) fn read_macro_buffer(&self, offset: usize, target: &mut [u8]) {
         let inner = self.inner.borrow();
@@ -765,19 +804,17 @@ impl<'a> KeyMap<'a> {
         self.inner.borrow().behavior.keyboard_macros.macro_sequences
     }
 
-    // ── Matrix state (host_security) ──
-
-    #[cfg(feature = "host_security")]
+    #[cfg(feature = "host_lock")]
     pub(crate) fn update_matrix_state(&self, event: &KeyboardEvent) {
         self.inner.borrow_mut().matrix_state.update(event);
     }
 
-    #[cfg(feature = "host_security")]
+    #[cfg(feature = "host_lock")]
     pub(crate) fn read_matrix_state(&self, target: &mut [u8]) {
         self.inner.borrow().matrix_state.read_all(target);
     }
 
-    #[cfg(feature = "host_security")]
+    #[cfg(feature = "host_lock")]
     pub(crate) fn read_matrix_key(&self, row: u8, col: u8) -> bool {
         self.inner.borrow().matrix_state.read(row, col)
     }
@@ -874,5 +911,73 @@ mod test {
         assert!(!(self_activated && !keymap.is_layer_active(2)));
         keymap.deactivate_layer_if_active(2);
         assert!(self_activated && !keymap.is_layer_active(2));
+    }
+
+    #[test]
+    fn out_of_range_positions_do_not_panic_or_wrap() {
+        use rmk_types::action::KeyAction;
+
+        use crate::config::{BehaviorConfig, PositionalConfig};
+        use crate::event::KeyboardEventPos;
+        use crate::keymap::{KeyMap, KeymapData};
+
+        // One key per layer: layer 0 holds A, layer 1 holds B.
+        let mut data = KeymapData::<1, 1, 2>::new([[[k!(A)]], [[k!(B)]]]);
+        let mut behavior = BehaviorConfig::default();
+        let positional = PositionalConfig::<1, 1>::default();
+        let keymap = KeyMap::build(&mut data, &mut behavior, &positional);
+
+        // Positive control: a valid position resolves normally.
+        assert_eq!(keymap.get_action_at(KeyboardEventPos::key_pos(0, 0), 0), k!(A));
+
+        // Out-of-range col and layer read as No instead of panicking.
+        assert_eq!(keymap.get_action_at(KeyboardEventPos::key_pos(1, 0), 0), KeyAction::No);
+        assert_eq!(keymap.get_action_at(KeyboardEventPos::key_pos(0, 0), 2), KeyAction::No);
+
+        // Out-of-range row: the flat index would wrap into layer 1's [0][0],
+        // which holds B. The bounds check must return No, not the wrapped action.
+        assert_eq!(keymap.get_action_at(KeyboardEventPos::key_pos(0, 1), 0), KeyAction::No);
+
+        // Out-of-range writes are dropped without panicking or corrupting
+        // the wrapped slot.
+        keymap.set_action_at(KeyboardEventPos::key_pos(0, 1), 0, k!(C));
+        assert_eq!(keymap.get_action_at(KeyboardEventPos::key_pos(0, 0), 1), k!(B));
+    }
+
+    #[test]
+    fn out_of_range_events_do_not_panic_in_layer_cache() {
+        use rmk_types::action::KeyAction;
+
+        use crate::config::{BehaviorConfig, PositionalConfig};
+        use crate::event::KeyboardEvent;
+        use crate::keymap::{KeyMap, KeymapData};
+
+        // One key per layer: layer 0 holds A, layer 1 holds B.
+        let mut data = KeymapData::<1, 1, 2>::new([[[k!(A)]], [[k!(B)]]]);
+        let mut behavior = BehaviorConfig::default();
+        let positional = PositionalConfig::<1, 1>::default();
+        let keymap = KeyMap::build(&mut data, &mut behavior, &positional);
+
+        // Press and release at an out-of-range col: the flat cache index would
+        // be out of bounds. Both directions must resolve to No without panicking.
+        assert_eq!(
+            keymap.get_action_with_layer_cache(KeyboardEvent::key(0, 1, true)),
+            KeyAction::No
+        );
+        assert_eq!(
+            keymap.get_action_with_layer_cache(KeyboardEvent::key(0, 1, false)),
+            KeyAction::No
+        );
+
+        // The cache entry for the valid position is untouched by the
+        // out-of-range events.
+        assert_eq!(
+            keymap.get_action_with_layer_cache(KeyboardEvent::key(0, 0, true)),
+            k!(A)
+        );
+        assert_eq!(
+            keymap.get_action_with_layer_cache(KeyboardEvent::key(0, 0, false)),
+            k!(A)
+        );
     }
 }

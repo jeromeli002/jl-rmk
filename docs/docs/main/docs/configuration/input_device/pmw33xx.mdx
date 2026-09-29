@@ -3,14 +3,12 @@
 PMW3360 / PMW3389 are optical mouse sensors.
 
 ::: note
-Both chips, the PMW3360 and PMW3389, are very similar. The main difference is the higher maximum cpi of the sensor. (12000 on the PMW3360 vs. 16000 on PMW3389)
-They share one driver in RMK and the configuration of both is the same.
+Both chips, the PMW3360 and PMW3389, are very similar. The main difference is the higher maximum cpi of the sensor. (12000 on the PMW3360 vs. 16000 on PMW3389) They share one driver in RMK and the configuration of both is the same.
 
 - PMW33xx uses full-duplex SPI. (MISO/ MOSI) Please note that because of the special requirements those sensors have for the switching of their chip select pin, they can not share an SPI bus with each other or any other SPI device. For each SPI peripheral (SPI0, SPI1 etc.) there can only be one sensor connected.
 - Set `motion` pin for better power efficiency. If omitted, the sensor is polled.
 - By default, report rate is limited to 125 Hz to prevent flooding the event channel, which causes latency issues especially over BLE.
 - Only Nrf, RP2040 and STM32 are supported now.
-
 :::
 
 ## `toml` configuration
@@ -18,8 +16,8 @@ They share one driver in RMK and the configuration of both is the same.
 ```toml
 [[input_device.pmw33xx]]
 name = "trackball0"
-sensor_type = "PMW3360" # or 3389
-id = 0 # optional number between 0-255. Ids are used for debug prints. Set to 0 if omitted.
+sensor_type = "PMW3360" # or "PMW3389"
+id = 0 # optional number between 0-255. The generated PointingProcessor is paired to it. Set to 0 if omitted.
 
 spi.instance = "SPI0"
 spi.sck = "PIN_18"
@@ -35,15 +33,15 @@ spi.cs = "PIN_17"
 # spi.rx_dma = "DMA_CH3" # omit for nrf52
 
 # STM32 pins do not implement the Wait trait, therefore the motion pin has no effect.
-# For STM32 you could use ExitInput and configure in Rust.
+# For STM32 you could use ExtiInput and configure in Rust.
 motion = "PIN_20" # Optional. If omitted, the sensor is polled.
 
 # how often the sensor sends reports to the computer
 report_hz = 125 # Optional: Report rate in Hz
 
-cpi = 1600
-rot_trans_angle = -15
-liftoff_dist = 8
+cpi = 1600 # Optional, defaults to 1600
+rot_trans_angle = -15 # Optional, defaults to 0
+liftoff_dist = 8 # Optional, defaults to 0
 proc_invert_x = true
 # proc_invert_y = true
 # proc_swap_xy = true
@@ -63,10 +61,7 @@ name = ...
 ```
 
 ::: warning Multi-device ID assignment
-
-`PointingEvent` carries a `device_id` so that each `PointingProcessor` can be paired
-with a specific sensor. If you have sensors on both halves of a split keyboard,
-assign distinct ids to avoid the central treating them as the same device:
+`PointingEvent` carries a `device_id` so that each `PointingProcessor` can be paired with a specific sensor. If you have sensors on both halves of a split keyboard, assign distinct ids to avoid the central treating them as the same device:
 
 ```toml
 # Central side sensor
@@ -78,27 +73,14 @@ id = 0
 id = 1
 ```
 
-The peripheral forwards events to the central with the `device_id` preserved.
-The generated `PointingProcessorConfig` on the central will automatically use the
-matching `device_id` for each sensor.
-
-:::
-
-::: warning Breaking change
-
-Adding `device_id` to `PointingEvent` changes the serialized binary format used by the
-split protocol. Both halves of a split keyboard **must** be flashed with the same
-firmware version at the same time.
-
+The peripheral forwards events to the central with the `device_id` preserved. The generated `PointingProcessorConfig` on the central will automatically use the matching `device_id` for each sensor.
 :::
 
 ## Rust configuration
 
-Define a `PointingDevice` and add it to `run_all!` macro.
-For a split keyboard this must be added to the file (`central.rs` or `peripheral.rs`) corresponding to the side the sensor is connected to.
+Define a `PointingDevice` and add it to `run_all!` macro. For a split keyboard this must be added to the file (`central.rs` or `peripheral.rs`) corresponding to the side the sensor is connected to.
 
 ::: warning
-
 For nrf52 chips you need to add an interrupt for the used SPI. For example when using SPI2:
 
 ```rust
@@ -109,12 +91,11 @@ bind_interrupts!(struct Irqs {
     SPI2 => spim::InterruptHandler<peripherals::SPI2>;
 });
 ```
-
 :::
 
 ```rust
     use embassy_rp::spi::{Spi, Config, Polarity, Phase};
-    use embassy_rp::gpio::{Level, Output, Pull};
+    use embassy_rp::gpio::{Input, Level, Output, Pull};
     use rmk::input_device::pointing::PointingDevice;
     // for PMW3360 import
     use rmk::input_device::pmw33xx::{Pmw33xx, Pmw33xxConfig, Pmw3360Spec};
@@ -139,9 +120,9 @@ bind_interrupts!(struct Irqs {
 
     // Initialize PMW33xx mouse sensor
     let sensor_config = Pmw33xxConfig {
-         // res_cpi: 1600,
+        // res_cpi: 1600,
         // rot_trans_angle: 0,
-        // liftoff_dist: 0x02,
+        // liftoff_dist: 0x02, // default
         ..Default::default()
     };
 
@@ -171,9 +152,7 @@ run_all!(matrix, pmw33xx_device),
 And define a `PointingProcessor` and add it to the `run_all!` macro to process the events.
 
 ::: warning
-
 This should be added to the `central.rs`-File even if the sensor is on split peripheral.
-
 :::
 
 ```rust
@@ -183,7 +162,7 @@ This should be added to the `central.rs`-File even if the sensor is on split per
 		// device_id: 0, // Match the id set on the PointingDevice (default 255 to match all devices)
         // invert_x: true, // invert axis if necessary
         // invert_y: true,
-        // swap_y: true,
+        // swap_xy: true,
         ..Default::default()
     };
 
@@ -193,4 +172,5 @@ This should be added to the `central.rs`-File even if the sensor is on split per
 ```
 
 ## Pointing Modes
+
 The PointingProcessor has four modes (Cursor, Scroll, Sniper, Caret) with per‑layer configuration. See the [PointingProcessor](./pointing_processor) page for all options.

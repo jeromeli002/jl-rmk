@@ -11,6 +11,8 @@ use crate::event::{KeyboardEvent, PointingEvent};
 #[cfg(feature = "_ble")]
 pub mod ble;
 pub mod central;
+#[cfg(feature = "dfu_split")]
+pub(crate) mod dfu;
 /// Common abstraction layer of split driver
 pub(crate) mod driver;
 pub mod peripheral;
@@ -21,6 +23,16 @@ pub mod serial;
 
 /// Maximum size of a split message
 pub const SPLIT_MESSAGE_MAX_SIZE: usize = SplitMessage::POSTCARD_MAX_SIZE + 4;
+
+/// The rectangular region of the central's keymap covered by one split
+/// peripheral: its matrix size, and where it sits.
+#[derive(Debug, Clone, Copy)]
+pub struct PeripheralMatrixConfig {
+    pub rows: u8,
+    pub cols: u8,
+    pub row_offset: u8,
+    pub col_offset: u8,
+}
 
 /// Message used from central & peripheral communication
 #[repr(u8)]
@@ -50,8 +62,7 @@ pub(crate) enum SplitMessage {
     /// Modifier state from central to peripheral
     #[cfg(feature = "display")]
     Modifier(u8),
-    /// Sleep state from central to peripheral
-    #[cfg(feature = "display")]
+    /// Sleep state from central to peripheral.
     SleepState(bool),
     /// Battery status, from peripheral to central
     #[cfg(feature = "_ble")]
@@ -92,21 +103,28 @@ pub(crate) enum SplitMessage {
     /// Peripheral → Central: confirm mark_updated succeeded, about to reset.
     #[cfg(feature = "dfu_split")]
     FirmwareUpdateConfirm,
+    /// Central → Peripheral: request system reset.
+    #[cfg(feature = "dfu_split")]
+    SystemReset,
 }
 
 // -----------------------------------------------------------------------
 // FirmwareChunkData — buffer for dfu_split firmware transfer
 // -----------------------------------------------------------------------
 
+/// Maximum firmware chunk size in bytes for the split link transfer.
+#[cfg(feature = "dfu_split")]
+pub(crate) const SPLIT_CHUNK_SIZE: usize = 256;
+
 /// Fixed-size buffer for firmware chunk transfer over the split link.
 ///
 /// Postcard's COBS encoding stores this as `&[u8]` (varint length prefix
-/// + bytes) rather than a fixed `[u8; 256]` — necessary because serde
+/// + bytes) rather than a fixed array — necessary because serde
 /// does not implement `Deserialize` for arrays larger than 32 elements.
 #[cfg(feature = "dfu_split")]
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct FirmwareChunkData(pub [u8; 256]);
+pub struct FirmwareChunkData(pub [u8; SPLIT_CHUNK_SIZE]);
 
 #[cfg(feature = "dfu_split")]
 impl Serialize for FirmwareChunkData {
@@ -120,10 +138,10 @@ impl<'de> Deserialize<'de> for FirmwareChunkData {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         use serde::de::Error;
         let buf: &[u8] = Deserialize::deserialize(deserializer)?;
-        if buf.len() > 256 {
-            return Err(D::Error::custom("firmware chunk exceeds 256 bytes"));
+        if buf.len() > SPLIT_CHUNK_SIZE {
+            return Err(D::Error::custom("firmware chunk exceeds SPLIT_CHUNK_SIZE bytes"));
         }
-        let mut data = [0u8; 256];
+        let mut data = [0u8; SPLIT_CHUNK_SIZE];
         data[..buf.len()].copy_from_slice(buf);
         Ok(FirmwareChunkData(data))
     }
@@ -131,5 +149,5 @@ impl<'de> Deserialize<'de> for FirmwareChunkData {
 
 #[cfg(feature = "dfu_split")]
 impl MaxSize for FirmwareChunkData {
-    const POSTCARD_MAX_SIZE: usize = 258;
+    const POSTCARD_MAX_SIZE: usize = SPLIT_CHUNK_SIZE + 2;
 }
