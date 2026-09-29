@@ -6,7 +6,7 @@ directory is a scenario: `run_tests!("tests/scenarios")` expands each one into a
 adding one run `touch tests/integration/main.rs` to re-expand; a generated
 `scenarios_are_registered` test fails with that hint if you forget. Board
 fixtures live in `boards/`, a subdirectory, so they are not scenarios
-themselves. Run them from `rmk/` with any of the five feature rows CI uses
+themselves. Run them from `rmk/` with any of the feature rows CI uses
 (`RMK_TEST_FEATURESETS` in `.github/ci/_lib.sh`), for example:
 
 ```console
