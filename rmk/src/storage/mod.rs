@@ -37,40 +37,35 @@ use crate::split::ble::PeerAddress;
 #[derive(Debug)]
 pub(crate) enum FlashOperationMessage {
     /// Save a [`StorageItem`] to the storage.
-    /// `Some(id)` is answered once the write lands; `None` is fire-and-forget.
-    Store(StorageItem, Option<u8>),
+    Store(StorageItem),
     /// Read a stored value by [`StorageKey`].
-    /// Answered once on `REPLY` after every earlier message (FIFO).
-    Read(StorageKey, u8),
+    Read(StorageKey),
     /// Fully erase and reset the storage.
     Reset,
 }
 
-// Requests to the storage task. Send through `store`/`store_unchecked`/`read`/`reset`.
-static FLASH_CHANNEL: Channel<crate::RawMutex, FlashOperationMessage, { crate::FLASH_CHANNEL_SIZE }> = Channel::new();
+// Requests to the storage task, handled in order (FIFO). Each carries the id `REPLY` answers it
+// under, `None` when nobody waits. Send through `store`/`store_unchecked`/`read`/`reset`.
+static FLASH_CHANNEL: Channel<crate::RawMutex, (FlashOperationMessage, Option<u8>), { crate::FLASH_CHANNEL_SIZE }> =
+    Channel::new();
 /// The in-flight request's id: the lock hands it out and holds it until the reply arrives,
 /// so only one request waits on `REPLY` at a time.
 static REQUEST_ID: Mutex<crate::RawMutex, u8> = Mutex::new(0);
 /// Storage's reply of a request, `(request id, reply)`.
 static REPLY: Signal<crate::RawMutex, (u8, Result<Option<StorageValue>, ()>)> = Signal::new();
 
-/// Request the storage with `message`, whose id this fills in, and wait for the reply.
+/// Send `message` to the storage task and wait for its reply.
 /// Not an `async fn`, and no `send` future: either would hold a second copy of `message`.
 #[allow(clippy::manual_async_fn)]
 fn request(mut message: FlashOperationMessage) -> impl Future<Output = Result<Option<StorageValue>, ()>> {
     async move {
         let mut id = REQUEST_ID.lock().await;
         *id = id.wrapping_add(1);
-        match &mut message {
-            FlashOperationMessage::Store(_, ack) => *ack = Some(*id),
-            FlashOperationMessage::Read(_, slot_id) => *slot_id = *id,
-            FlashOperationMessage::Reset => {}
-        }
         loop {
             poll_fn(|cx| FLASH_CHANNEL.poll_ready_to_send(cx)).await;
-            match FLASH_CHANNEL.try_send(message) {
+            match FLASH_CHANNEL.try_send((message, Some(*id))) {
                 Ok(()) => break,
-                Err(TrySendError::Full(rejected)) => message = rejected,
+                Err(TrySendError::Full((rejected, _))) => message = rejected,
             }
         }
         // A predecessor cancelled after sending leaves its reply in the slot first: skip it by id.
@@ -85,22 +80,22 @@ fn request(mut message: FlashOperationMessage) -> impl Future<Output = Result<Op
 
 /// Write `item`, resolving once it has landed on flash.
 pub(crate) fn store(item: StorageItem) -> impl Future<Output = Result<Option<StorageValue>, ()>> {
-    request(FlashOperationMessage::Store(item, None))
+    request(FlashOperationMessage::Store(item))
 }
 
 /// Write `item` without waiting for the result.
 pub(crate) fn store_unchecked(item: StorageItem) -> impl Future<Output = ()> {
-    FLASH_CHANNEL.send(FlashOperationMessage::Store(item, None))
+    FLASH_CHANNEL.send((FlashOperationMessage::Store(item), None))
 }
 
 /// Read a stored item.
 pub(crate) fn read(key: StorageKey) -> impl Future<Output = Result<Option<StorageValue>, ()>> {
-    request(FlashOperationMessage::Read(key, 0))
+    request(FlashOperationMessage::Read(key))
 }
 
 /// Erase everything and reboot. Fire and forget.
-pub(crate) async fn reset() {
-    FLASH_CHANNEL.send(FlashOperationMessage::Reset).await
+pub(crate) fn reset() -> impl Future<Output = ()> {
+    FLASH_CHANNEL.send((FlashOperationMessage::Reset, None))
 }
 
 /// The most one user slot holds. Changing it reframes stored values, but the new
@@ -405,16 +400,6 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
     // Like `store`: split first so the future holds the pair, not the pair and `item`.
     fn put(&mut self, item: StorageItem) -> impl Future<Output = Result<(), SSError<F::Error>>> {
         let (key, value) = item.split();
-        self.put_value(key, value)
-    }
-
-    // Not an `async fn`, whose future would hold `value` twice.
-    #[allow(clippy::manual_async_fn)]
-    fn put_value(
-        &mut self,
-        key: StorageKey,
-        value: StorageValue,
-    ) -> impl Future<Output = Result<(), SSError<F::Error>>> {
         async move {
             self.flash
                 .store_item(&mut self.buffer, &key, &value)
@@ -566,6 +551,8 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
             })
             .await;
         }
+        // Flash now has every chunk, so the next save writes only what changed, zeros included.
+        data.macros_stored = true;
     }
 }
 
@@ -574,15 +561,12 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
 {
     async fn run(&mut self) -> ! {
         loop {
-            let (id, result) = match FLASH_CHANNEL.receive().await {
-                FlashOperationMessage::Store(item, ack) => {
-                    let result = self.put(item).await.map(|_| None).map_err(print_storage_error::<F>);
-                    match ack {
-                        Some(id) => (id, result),
-                        None => continue,
-                    }
+            let (message, reply_id) = FLASH_CHANNEL.receive().await;
+            let result = match message {
+                FlashOperationMessage::Store(item) => {
+                    self.put(item).await.map(|_| None).map_err(print_storage_error::<F>)
                 }
-                FlashOperationMessage::Read(key, id) => (id, self.fetch(key).await),
+                FlashOperationMessage::Read(key) => self.fetch(key).await,
                 FlashOperationMessage::Reset => {
                     let _ = self.flash.erase_all().await;
                     reboot_keyboard();
@@ -590,7 +574,9 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
                     core::future::pending().await
                 }
             };
-            REPLY.signal((id, result));
+            if let Some(id) = reply_id {
+                REPLY.signal((id, result));
+            }
         }
     }
 }
@@ -627,11 +613,8 @@ pub(crate) fn clear_flash_channel() {
 #[cfg(any(test, feature = "std"))]
 pub(crate) async fn drain_flash_channel() {
     loop {
-        match FLASH_CHANNEL.receive().await {
-            FlashOperationMessage::Read(_, id) | FlashOperationMessage::Store(_, Some(id)) => {
-                REPLY.signal((id, Ok(None)))
-            }
-            _ => {}
+        if let (_, Some(id)) = FLASH_CHANNEL.receive().await {
+            REPLY.signal((id, Ok(None)))
         }
     }
 }
@@ -658,7 +641,7 @@ mod tests {
     // every step, so it would also pass a primitive that loses wake-ups.
     fn take_request_id() -> u8 {
         match FLASH_CHANNEL.try_receive() {
-            Ok(FlashOperationMessage::Read(_, id)) | Ok(FlashOperationMessage::Store(_, Some(id))) => id,
+            Ok((_, Some(id))) => id,
             other => panic!("expected a request that wants a reply, got {other:?}"),
         }
     }
@@ -704,7 +687,7 @@ mod tests {
         assert!(second.as_mut().poll(&mut cx).is_pending());
         assert!(matches!(
             FLASH_CHANNEL.try_receive(),
-            Ok(FlashOperationMessage::Store(_, Some(_)))
+            Ok((FlashOperationMessage::Store(_), Some(_)))
         ));
     }
 
@@ -714,7 +697,7 @@ mod tests {
         let mut cx = Context::from_waker(Waker::noop());
         crate::test_support::clear_flash_channel();
         FLASH_CHANNEL
-            .try_send(FlashOperationMessage::Store(StorageItem::LayoutOption(42), None))
+            .try_send((FlashOperationMessage::Store(StorageItem::LayoutOption(42)), None))
             .unwrap();
 
         let mut write = pin!(store(StorageItem::PeerAddress(PeerAddress::new(0, true, [1; 6]))));
@@ -723,10 +706,10 @@ mod tests {
         // The storage task sees the older fire-and-forget write first, then this one.
         assert!(matches!(
             FLASH_CHANNEL.try_receive(),
-            Ok(FlashOperationMessage::Store(StorageItem::LayoutOption(42), None))
+            Ok((FlashOperationMessage::Store(StorageItem::LayoutOption(42)), None))
         ));
         let id = match FLASH_CHANNEL.try_receive() {
-            Ok(FlashOperationMessage::Store(StorageItem::PeerAddress(_), Some(id))) => id,
+            Ok((FlashOperationMessage::Store(StorageItem::PeerAddress(_)), Some(id))) => id,
             other => panic!("expected the peer address write, got {other:?}"),
         };
         assert!(write.as_mut().poll(&mut cx).is_pending());
@@ -949,6 +932,62 @@ mod tests {
                 storage.fetch(StorageKey::ConnectionType).await,
                 Ok(Some(StorageValue::ConnectionType(ConnectionType::Ble)))
             ));
+        });
+    }
+
+    /// A `clear_layout` boot leaves every macro chunk in flash, so a later save must also
+    /// write the chunks it empties, or the next boot loads the defaults' bytes back.
+    #[cfg(feature = "host")]
+    #[test]
+    fn macro_edit_after_clear_layout_survives_the_next_boot() {
+        use rmk_types::keyboard_macros::MacroOp;
+
+        use crate::config::PositionalConfig;
+        use crate::core_traits::Runnable;
+        use crate::keymap::{KeyMap, KeymapData};
+
+        // 40 characters, so the default spills into chunk 1.
+        static LONG: [MacroOp; 40] = [MacroOp::Char(b'a'); 40];
+        static DEFAULTS: [&[MacroOp]; 1] = [&LONG];
+        let behavior = || RuntimeBehaviorConfig {
+            keyboard_macros: &DEFAULTS,
+            ..RuntimeBehaviorConfig::default()
+        };
+        let positional = PositionalConfig::<1, 1>::default();
+        let clear_layout = RuntimeStorageConfig {
+            clear_layout: true,
+            ..RuntimeStorageConfig::default()
+        };
+
+        block_on(async {
+            // The first boot writes this firmware's schema, so the second honours `clear_layout`.
+            let storage = new_storage(async_flash_wrapper(Part::new())).await;
+            let (flash, _) = storage.flash.destroy();
+            let mut storage = new_storage_configured(flash, &clear_layout).await;
+            let mut data = KeymapData::new([[[KeyAction::No]]]);
+            let mut b = behavior();
+            let keymap = KeyMap::new_from_storage(&mut data, Some(&mut storage), &mut b, &positional).await;
+
+            // The host shortens macro 0, emptying chunk 1.
+            let mut shorter = [0u8; 2 * MACRO_CHUNK_SIZE];
+            shorter[0] = b'b';
+            crate::test_support::clear_flash_channel();
+            let save = async {
+                let changed = keymap.macros(|m| m.write(0, &shorter));
+                crate::keyboard::macros::persist(&keymap, changed).await.unwrap();
+                keymap.macros(|m| m.bytes().to_vec())
+            };
+            let saved = match select(storage.run(), save).await {
+                Either::First(never) => never,
+                Either::Second(bytes) => bytes,
+            };
+
+            let (flash, _) = storage.flash.destroy();
+            let mut storage = new_storage(flash).await;
+            let mut data = KeymapData::new([[[KeyAction::No]]]);
+            let mut b = behavior();
+            let keymap = KeyMap::new_from_storage(&mut data, Some(&mut storage), &mut b, &positional).await;
+            assert_eq!(keymap.macros(|m| m.bytes().to_vec()), saved);
         });
     }
 
