@@ -25,6 +25,9 @@ pub use layout::{STOCK_WIDTHS, layout_blob_from_toml, layout_info_from_toml};
 pub(crate) mod light;
 pub(crate) mod storage;
 
+/// Bytes in one persisted macro chunk, shared by configuration and firmware.
+pub const MACRO_CHUNK_SIZE: usize = 32;
+
 /// Protocol-level capacity ceilings for wire-format Vec sizes.
 ///
 /// These define the maximum values any firmware may use for protocol
@@ -39,8 +42,8 @@ pub mod protocol_limits {
     pub const MAX_COMBO_SIZE: usize = 16;
     /// Max pattern entries per morse key — ceiling for `MORSE_SIZE`
     pub const MAX_MORSE_SIZE: usize = 32;
-    /// Max bytes per macro data chunk — ceiling for `MACRO_DATA_SIZE`
-    pub const MAX_MACRO_DATA_SIZE: usize = 256;
+    /// The u8 storage index addresses chunks 0 through 255.
+    pub const MAX_MACRO_SPACE_SIZE: usize = super::MACRO_CHUNK_SIZE * (u8::MAX as usize + 1);
     /// Max key positions in an unlock challenge.
     pub const MAX_UNLOCK_KEYS_SIZE: usize = 4;
 }
@@ -310,8 +313,13 @@ pub(crate) struct RmkConstantsConfig {
     #[serde_inline_default(8)]
     #[serde(deserialize_with = "check_max_patterns_per_key")]
     pub max_patterns_per_key: usize,
-    /// Macro space size in bytes for storing sequences
+    /// Maximum number of macros, default and host-written together
+    #[serde_inline_default(32)]
+    #[serde(deserialize_with = "check_macro_max_num")]
+    pub macro_max_num: usize,
+    /// Bytes of the buffer every macro shares, a multiple of 32
     #[serde_inline_default(256)]
+    #[serde(deserialize_with = "check_macro_space_size")]
     pub macro_space_size: usize,
     /// Default debounce time in ms
     #[serde_inline_default(20)]
@@ -334,10 +342,6 @@ pub(crate) struct RmkConstantsConfig {
     /// BLE Split Central sleep timeout in seconds (0 = disabled)
     #[serde_inline_default(0)]
     pub split_central_sleep_timeout_seconds: u32,
-    /// Maximum macro data chunk size for protocol transfers (bytes).
-    /// Smaller values reduce firmware RAM usage but require more round-trips.
-    #[serde_inline_default(64)]
-    pub protocol_macro_chunk_size: usize,
     /// Maximum number of auto mouse layer entries; auto-derived from `[[behavior.auto_mouse_layer]]` if unset.
     #[serde(default)]
     pub auto_mouse_layer_max_num: Option<usize>,
@@ -359,6 +363,33 @@ where
     if value > u8::MAX as usize {
         return Err(de::Error::custom(format!(
             "combo_max_num must be between 0 and 255, got {value}"
+        )));
+    }
+    Ok(value)
+}
+
+fn check_macro_max_num<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    let value = Deserialize::deserialize(deserializer)?;
+    if value > u8::MAX as usize {
+        return Err(de::Error::custom(format!(
+            "macro_max_num must be between 0 and 255, got {value}"
+        )));
+    }
+    Ok(value)
+}
+
+fn check_macro_space_size<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    let value: usize = Deserialize::deserialize(deserializer)?;
+    if value == 0 || !value.is_multiple_of(MACRO_CHUNK_SIZE) || value > protocol_limits::MAX_MACRO_SPACE_SIZE {
+        return Err(de::Error::custom(format!(
+            "macro_space_size must be a multiple of {MACRO_CHUNK_SIZE} between {MACRO_CHUNK_SIZE} and {}, got {value}",
+            protocol_limits::MAX_MACRO_SPACE_SIZE
         )));
     }
     Ok(value)
@@ -430,6 +461,7 @@ impl Default for RmkConstantsConfig {
             morse_max_num: 8,
             morse_profile_max_num: 16,
             max_patterns_per_key: 8,
+            macro_max_num: 32,
             macro_space_size: 256,
             debounce_time: 20,
             report_channel_size: 16,
@@ -438,7 +470,6 @@ impl Default for RmkConstantsConfig {
             split_peripherals_num: 0,
             ble_profiles_num: 3,
             split_central_sleep_timeout_seconds: 0,
-            protocol_macro_chunk_size: 64,
             auto_mouse_layer_max_num: None,
             rynk_buffer_size: 488,
             dongle_pairing_window_secs: 30,
@@ -950,11 +981,24 @@ pub(crate) struct MacroConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "operation", rename_all = "lowercase")]
 pub(crate) enum MacroOperation {
-    Tap { keycode: String },
-    Down { keycode: String },
-    Up { keycode: String },
-    Delay { duration: DurationMillis },
-    Text { text: String },
+    Tap {
+        keycode: String,
+    },
+    Down {
+        keycode: String,
+    },
+    Up {
+        keycode: String,
+    },
+    Delay {
+        duration: DurationMillis,
+    },
+    Text {
+        text: String,
+    },
+    /// The ops before it run on the macro key's press, the ops after it on its release
+    #[serde(rename = "pause_for_release")]
+    PauseForRelease,
 }
 
 /// Configurations for forks
@@ -1568,6 +1612,23 @@ channel_size = 32
         assert_eq!(config.event.modifier.channel_size, 8);
         assert_eq!(config.event.modifier.subs, 2);
         assert_eq!(config.event.layer_change.subs, 1);
+    }
+
+    #[test]
+    fn macro_space_size_matches_chunk_index_capacity() {
+        for size in [32, 256, 1024, 1056, 8160, 8192] {
+            let config: KeyboardTomlConfig = toml::from_str(&format!("[rmk]\nmacro_space_size = {size}\n")).unwrap();
+            assert_eq!(config.build_constants(&[]).unwrap().macro_space_size, size);
+        }
+        for size in [0, 31, 33, 8191, 8193, 8224, 65535] {
+            let error =
+                toml::from_str::<KeyboardTomlConfig>(&format!("[rmk]\nmacro_space_size = {size}\n")).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("macro_space_size must be a multiple of 32 between 32 and 8192")
+            );
+        }
     }
 
     #[test]

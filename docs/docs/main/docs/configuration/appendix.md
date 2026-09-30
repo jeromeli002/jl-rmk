@@ -392,7 +392,9 @@ morse_profile_max_num = 16
 # Maximum number of patterns a morse key can handle (min 4, max 32; raised automatically to fit the
 # largest configured morse key)
 max_patterns_per_key = 32
-# Macro space size in bytes for storing sequences
+# Maximum number of macros
+macro_max_num = 32
+# Bytes of macro memory shared by all macros (a multiple of 32, max 8192)
 macro_space_size = 256
 # Default debounce time in ms
 debounce_time = 20
@@ -408,8 +410,6 @@ split_peripherals_num = 0
 ble_profiles_num = 3
 # BLE Split Central sleep timeout in seconds (0 = disabled)
 split_central_sleep_timeout_seconds = 0
-# Maximum macro data bytes in one Rynk macro request or response
-protocol_macro_chunk_size = 64
 # Rynk RX/TX buffer size in bytes. 488 bytes = 2*BLE maximum packet size
 rynk_buffer_size = 488
 # Length of one dongle pairing window in seconds. Dongle builds only; repeated

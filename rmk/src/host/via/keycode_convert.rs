@@ -46,13 +46,7 @@ pub(crate) fn to_via_keycode(key_action: KeyAction) -> u16 {
             Action::LayerToggle(l) => 0x5260 | l as u16,
             Action::TriLayerLower => 0x7c77,
             Action::TriLayerUpper => 0x7c78,
-            Action::TriggerMacro(idx) => {
-                // if idx < 32 {
-                0x7700 + (idx as u16)
-                // } else {
-                // 0x0
-                // }
-            }
+            Action::TriggerMacro(idx) => 0x7700 + (idx as u16),
             Action::OneShotLayer(l) => {
                 // One-shot layer
                 if l < 16 { 0x5280 | l as u16 } else { 0x0000 }
@@ -219,11 +213,7 @@ pub(crate) fn from_via_keycode(via_keycode: u16) -> KeyAction {
             warn!("QMK functions {:#X} not supported", via_keycode);
             KeyAction::No
         }
-        0x7700..=0x771F => {
-            // Macro
-            let id = via_keycode as u8 & 0x1F;
-            KeyAction::Single(Action::TriggerMacro(id))
-        }
+        0x7700..=0x77FF => KeyAction::Single(Action::TriggerMacro(via_keycode as u8)),
         0x7800..=0x783F => {
             // TODO: backlight and rgb configuration
             warn!("Backlight and RGB configuration key not supported");
