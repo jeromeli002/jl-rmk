@@ -209,6 +209,23 @@ steps = [
 ]
 expect = [["LShift", "A"], ["LShift"], []]
 
+# A text ends 10ms after its last key comes up, lowercase or not, and only then
+# does the next op run: W, pressed 2ms after `a` comes up, gets in ahead of the
+# tap. Sent at once, the text's end made a host IME switch input mode.
+[[test]]
+name = "macro_text_ends_10ms_after_its_last_key"
+behavior.macro = { macros = [
+  { operations = [{ operation = "text", text = "a" }, { operation = "tap", keycode = "X" }] },
+] }
+steps = [
+  { press = [0, 6] },
+  { delay = 12 },
+  { press = [1, 3] },
+  { release = [1, 3] },
+  { release = [0, 6] },
+]
+expect = [["A"], [], [], ["W"], ["W", "X"], ["W"], []]
+
 # A macro step that triggers a macro queues it behind the rest of the current
 # macro, so its A comes after the B that follows the step.
 [[test]]

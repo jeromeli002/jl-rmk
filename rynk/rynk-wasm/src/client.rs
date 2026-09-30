@@ -19,7 +19,7 @@ use rynk::rmk_types::ble::BleStatus;
 use rynk::rmk_types::combo::Combo;
 use rynk::rmk_types::connection::{ConnectionStatus, ConnectionType};
 use rynk::rmk_types::fork::Fork;
-use rynk::rmk_types::keyboard_macros::MacroOp;
+use rynk::rmk_types::keyboard_macros::{Macro, MacroOp};
 use rynk::rmk_types::led_indicator::LedIndicator;
 use rynk::rmk_types::morse::Morse;
 use rynk::rmk_types::protocol::rynk::{
@@ -89,6 +89,16 @@ impl RynkClient {
     /// Replace macro `index` with `ops`; the native method takes the ops by reference.
     pub async fn write_macro(&self, index: u8, ops: Vec<MacroOp>) -> Result<(), JsValue> {
         self.drive(self.client.write_macro(index, &ops)).await
+    }
+
+    /// Bytes `ops` take of the keyboard's macro memory, `macro_space_size`: their
+    /// encoding behind its length, a postcard varint the way the firmware keeps a
+    /// slot. More than any keyboard holds when they overflow a `Macro`.
+    pub fn macro_size(&self, ops: Vec<MacroOp>) -> usize {
+        match Macro::from_slice(&ops) {
+            Ok(m) => m.as_bytes().len() + if m.as_bytes().len() < 0x80 { 1 } else { 2 },
+            Err(_) => usize::MAX,
+        }
     }
 }
 

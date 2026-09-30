@@ -112,7 +112,7 @@ async fn script(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(caps.max_combos, 8);
     assert_eq!(caps.max_combo_keys, 4);
     assert_eq!(caps.max_macros, 32);
-    assert_eq!(caps.macro_max_size, 96);
+    assert_eq!(caps.macro_space_size, 256);
     assert!(!caps.macros_writable, "no storage, so macros are read-only");
     assert_eq!(caps.max_morse, 8);
     assert_eq!(caps.max_patterns_per_key, 8);

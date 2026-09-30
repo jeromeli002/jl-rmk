@@ -39,7 +39,7 @@ pub struct BuildConstants {
     pub morse_profile_max_num: usize,
     pub max_patterns_per_key: usize,
     pub macro_max_num: usize,
-    pub macro_max_size: usize,
+    pub macro_space_size: usize,
     pub debounce_time: u16,
     pub mouse_key_interval: u16,
     pub mouse_wheel_interval: u16,
@@ -245,11 +245,11 @@ impl crate::KeyboardTomlConfig {
                 protocol_limits::MAX_MORSE_SIZE
             ));
         }
-        if rmk.macro_max_size > protocol_limits::MAX_MACRO_SIZE {
+        if rmk.macro_space_size > protocol_limits::MAX_MACRO_SPACE_SIZE {
             return Err(format!(
-                "macro_max_size ({}) exceeds protocol ceiling MAX_MACRO_SIZE ({})",
-                rmk.macro_max_size,
-                protocol_limits::MAX_MACRO_SIZE
+                "macro_space_size ({}) exceeds protocol ceiling MAX_MACRO_SPACE_SIZE ({})",
+                rmk.macro_space_size,
+                protocol_limits::MAX_MACRO_SPACE_SIZE
             ));
         }
         let auto_mouse_layer_max_num = rmk
@@ -279,7 +279,7 @@ impl crate::KeyboardTomlConfig {
         validate_u8_capability("split_peripherals_num", split_peripherals_num)?;
         validate_u8_capability("ble_profiles_num", rmk.ble_profiles_num)?;
         validate_u8_capability("macro_max_num", rmk.macro_max_num)?;
-        validate_u8_capability("macro_max_size", rmk.macro_max_size)?;
+        validate_u16_capability("macro_space_size", rmk.macro_space_size)?;
         validate_u16_capability("rynk_buffer_size", rmk.rynk_buffer_size)?;
         Ok(BuildConstants {
             custom_message_max_size: rmk.custom_message_max_size,
@@ -290,7 +290,7 @@ impl crate::KeyboardTomlConfig {
             morse_profile_max_num: rmk.morse_profile_max_num,
             max_patterns_per_key: rmk.max_patterns_per_key,
             macro_max_num: rmk.macro_max_num,
-            macro_max_size: rmk.macro_max_size,
+            macro_space_size: rmk.macro_space_size,
             debounce_time: rmk.debounce_time,
             mouse_key_interval: rmk.mouse_key_interval,
             mouse_wheel_interval: rmk.mouse_wheel_interval,

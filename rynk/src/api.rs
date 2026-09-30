@@ -300,11 +300,11 @@ impl Client {
         self.request::<command::GetMacro>(&index).await
     }
 
-    /// Replace macro `index` with `ops`, at most [`DeviceCapabilities::macro_max_size`]
-    /// of them. A macro that does not fit the wire type fails with
-    /// [`RynkHostError::Encode`] before anything is sent; the firmware answers
-    /// `Invalid` for one it cannot run (two pauses, non-ASCII text) and
-    /// `Unimplemented` when [`DeviceCapabilities::macros_writable`] is false.
+    /// Replace macro `index` with `ops`. A macro past
+    /// [`DeviceCapabilities::macro_space_size`] fails with [`RynkHostError::Encode`]
+    /// before anything is sent; the firmware answers `Invalid` for one it cannot
+    /// fit beside the other macros, and `Unimplemented` when
+    /// [`DeviceCapabilities::macros_writable`] is false.
     pub async fn write_macro(&self, index: u8, ops: &[MacroOp]) -> Result<(), RynkHostError> {
         let macro_ops = Macro::from_slice(ops).map_err(|_| RynkHostError::Encode(Cmd::SetMacro))?;
         self.request::<command::SetMacro>(&SetMacroRequest { index, macro_ops })
@@ -403,7 +403,7 @@ impl Client {
 impl Client {
     /// [`get_macro`](Self::get_macro) as a growable list.
     pub async fn read_macro(&self, index: u8) -> Result<Vec<MacroOp>, RynkHostError> {
-        Ok(self.get_macro(index).await?.to_vec())
+        Ok(self.get_macro(index).await?.ops().collect())
     }
 
     /// Read the whole keymap — every layer, in [`get_keymap_bulk`](Self::get_keymap_bulk)

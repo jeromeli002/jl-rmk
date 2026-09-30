@@ -394,8 +394,8 @@ morse_profile_max_num = 16
 max_patterns_per_key = 32
 # Maximum number of macros
 macro_max_num = 32
-# Maximum number of operations in one macro
-macro_max_size = 96
+# Bytes of macro memory shared by all macros (a multiple of 32, max 8192)
+macro_space_size = 256
 # Default debounce time in ms
 debounce_time = 20
 # Report channel size

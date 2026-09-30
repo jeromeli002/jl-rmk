@@ -3,7 +3,6 @@ use core::cell::RefCell;
 use embassy_time::Duration;
 use rmk_types::action::{EncoderAction, KeyAction};
 use rmk_types::fork::Fork;
-use rmk_types::keyboard_macros::Macro;
 use rmk_types::morse::{Morse, MorseProfile};
 #[cfg(all(feature = "storage", feature = "host"))]
 use {
@@ -15,6 +14,7 @@ use crate::config::{BehaviorConfig, Hand, MouseKeyConfig, OneShotModifiersConfig
 use crate::event::{KeyboardEvent, KeyboardEventPos, LayerChangeEvent, publish_event};
 use crate::input_device::rotary_encoder::Direction;
 use crate::keyboard::combo::Combo;
+use crate::keyboard::macros::Macros;
 #[cfg(feature = "host_lock")]
 use crate::matrix::MatrixState;
 
@@ -34,6 +34,12 @@ pub struct KeymapData<const ROW: usize, const COL: usize, const NUM_LAYER: usize
     encoder_layer_cache: [[u8; 2]; NUM_ENCODER],
     /// VIA/Vial layout options; persisted via `LayoutOption`
     pub(crate) layout_option: u32,
+    /// The macro buffer, see [`crate::keyboard::macros`].
+    #[cfg(feature = "host")]
+    pub(crate) macros: [u8; crate::MACRO_SPACE_SIZE],
+    /// Whether flash holds the buffer; otherwise it is seeded from the defaults.
+    #[cfg(feature = "host")]
+    pub(crate) macros_stored: bool,
 }
 
 impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize> KeymapData<ROW, COL, NUM_LAYER, 0> {
@@ -46,6 +52,10 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize> KeymapData<ROW,
             layer_cache: [[0; COL]; ROW],
             encoder_layer_cache: [],
             layout_option: 0,
+            #[cfg(feature = "host")]
+            macros: [0; crate::MACRO_SPACE_SIZE],
+            #[cfg(feature = "host")]
+            macros_stored: false,
         }
     }
 }
@@ -65,6 +75,10 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCOD
             layer_cache: [[0; COL]; ROW],
             encoder_layer_cache: [[0u8; 2]; NUM_ENCODER],
             layout_option: 0,
+            #[cfg(feature = "host")]
+            macros: [0; crate::MACRO_SPACE_SIZE],
+            #[cfg(feature = "host")]
+            macros_stored: false,
         }
     }
 }
@@ -107,6 +121,7 @@ struct KeyMapInner<'a> {
     mouse_buttons: u8,
     /// VIA/Vial layout options; persisted via `LayoutOption`
     layout_option: u32,
+    macros: Macros<'a>,
     /// Matrix state for vial lock
     #[cfg(feature = "host_lock")]
     matrix_state: MatrixState,
@@ -378,6 +393,10 @@ impl<'a> KeyMap<'a> {
         let layer_cache = data.layer_cache.as_mut_slice().as_flattened_mut();
         let encoder_layer_cache = data.encoder_layer_cache.as_mut_slice().as_flattened_mut();
         let hand = positional_config.hand.as_slice().as_flattened();
+        #[cfg(feature = "host")]
+        let macros = Macros::new(behavior.keyboard_macros, &mut data.macros, data.macros_stored);
+        #[cfg(not(feature = "host"))]
+        let macros = Macros::new(behavior.keyboard_macros, &mut [], false);
 
         KeyMap {
             inner: RefCell::new(KeyMapInner {
@@ -394,6 +413,7 @@ impl<'a> KeyMap<'a> {
                 hand,
                 mouse_buttons: 0,
                 layout_option: data.layout_option,
+                macros,
                 #[cfg(feature = "host_lock")]
                 matrix_state: MatrixState::new(ROW, COL),
             }),
@@ -693,25 +713,8 @@ impl<'a> KeyMap<'a> {
         f(&mut inner.behavior.combo.combos)
     }
 
-    /// The macro at `idx`: the host-written one when flash holds it, otherwise
-    /// the compiled-in default.
-    pub(crate) async fn read_macro(&self, idx: u8) -> Result<Macro, ()> {
-        // Flash may still hold a slot past a lowered `macro_max_num`, which no host can clear.
-        #[cfg(all(feature = "storage", feature = "host"))]
-        if (idx as usize) < crate::MACRO_MAX_NUM
-            && let Some(crate::storage::StorageValue::Macro(macro_ops)) =
-                crate::storage::read(crate::storage::StorageKey::Macro(idx)).await?
-        {
-            return Ok(macro_ops);
-        }
-        Ok(self
-            .inner
-            .borrow()
-            .behavior
-            .keyboard_macros
-            .get(idx as usize)
-            .and_then(|ops| Macro::from_slice(ops).ok())
-            .unwrap_or_default())
+    pub(crate) fn macros<R>(&self, f: impl FnOnce(&mut Macros<'a>) -> R) -> R {
+        f(&mut self.inner.borrow_mut().macros)
     }
 
     pub(crate) fn mouse_buttons(&self) -> u8 {

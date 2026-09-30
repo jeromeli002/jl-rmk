@@ -4,7 +4,7 @@ use embassy_futures::yield_now;
 #[cfg(feature = "_ble")]
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer, with_deadline};
-use heapless::{Deque, Vec};
+use heapless::Vec;
 use rmk_types::action::{Action, KeyAction, KeyboardAction};
 use rmk_types::fork::StateBits;
 use rmk_types::keyboard_macros::MacroOp;
@@ -37,6 +37,7 @@ pub(crate) mod auto_mouse_layer;
 pub mod combo;
 pub(crate) mod fork;
 pub(crate) mod held_buffer;
+pub(crate) mod macros;
 pub(crate) mod morse;
 pub(crate) mod mouse;
 pub(crate) mod oneshot;
@@ -202,9 +203,7 @@ pub struct Keyboard<'a> {
     /// Caps Word state machine
     caps_word: CapsWordState,
 
-    /// Macro ops waiting to run, front first.
-    macro_ops: Deque<MacroOp, { 2 * crate::MACRO_MAX_SIZE }>,
-    /// When the front macro op may run.
+    /// When the next macro op may run.
     macro_due: Instant,
 
     /// The real state before fork activations is stored here
@@ -248,7 +247,6 @@ impl<'a> Keyboard<'a> {
             #[cfg(feature = "_ble")]
             user_hold: None,
             caps_word: CapsWordState::default(),
-            macro_ops: Deque::new(),
             macro_due: Instant::from_ticks(0),
             fork_states: [None; FORK_MAX_NUM],
             fork_keep_mask: ModifierCombination::default(),
@@ -307,7 +305,7 @@ impl<'a> Keyboard<'a> {
             self.user_hold.map(|(at, _)| at),
             buffered,
             self.mouse.next_deadline(),
-            (!self.macro_ops.is_empty()).then_some(self.macro_due),
+            self.keymap.macros(|m| m.is_playing()).then_some(self.macro_due),
         ]
         .into_iter()
         .flatten()
@@ -1279,24 +1277,8 @@ impl<'a> Keyboard<'a> {
                 self.update_osl(event);
             }
             Action::TriggerMacro(idx) => {
-                // Without a `PauseForRelease` the press queues the whole macro; with one,
-                // the press queues the ops before it and the release the ops after it.
-                if let Ok(macro_ops) = self.keymap.read_macro(idx).await {
-                    let mut halves = macro_ops.split(|op| *op == MacroOp::PauseForRelease);
-                    let current_half = if event.pressed { halves.next() } else { halves.nth(1) };
-                    if let Some(half) = current_half.filter(|half| !half.is_empty()) {
-                        // The release half starts 20ms late so it doesn't toggle the host's IME.
-                        let wait = (!event.pressed).then_some(MacroOp::Delay(20));
-                        if self.macro_ops.capacity() - self.macro_ops.len() < half.len() + wait.iter().len() {
-                            warn!("Macro queue full, dropped macro {}", idx);
-                        } else {
-                            self.macro_ops.extend(wait.into_iter().chain(half.iter().copied()));
-                        }
-                    }
-                } else {
-                    // Flash may hold a macro the user wrote over this slot's default,
-                    // so running the default instead would be the wrong macro.
-                    error!("Failed to read macro {}, skipped", idx);
+                if !self.keymap.macros(|m| m.queue(idx, event.pressed)) {
+                    warn!("Macro queue full, dropped macro {}", idx);
                 }
             }
             Action::KeyWithModifier(key_code, modifiers) => self.process_action_key(key_code, modifiers, event).await,
@@ -1729,7 +1711,7 @@ impl<'a> Keyboard<'a> {
         if self.macro_due > Instant::now() {
             return;
         }
-        let Some(op) = self.macro_ops.pop_front() else {
+        let Some(op) = self.keymap.macros(|m| m.next_op()) else {
             return;
         };
         // Every op registers under the macro identity, never the trigger key's.
@@ -1756,8 +1738,9 @@ impl<'a> Keyboard<'a> {
                 Timer::after_millis(10).await;
                 self.unregister_key(key, ModifierCombination::new(), release);
                 self.send_keyboard_report(modifiers).await;
-                // The text ends here: give the next op, even a mouse click, the real modifiers.
-                if !matches!(self.macro_ops.front(), Some(MacroOp::Char(_))) {
+                // The text ends here
+                if !matches!(self.keymap.macros(|m| m.peek_op()), Some(MacroOp::Char(_))) {
+                    Timer::after_millis(10).await;
                     self.send_keyboard_report_with_resolved_modifiers(false).await;
                 }
                 if shift {
@@ -1765,7 +1748,7 @@ impl<'a> Keyboard<'a> {
                 }
             }
             MacroOp::Delay(ms) => self.macro_due = Instant::now() + Duration::from_millis(ms as u64),
-            // Never queued: the halves are split at it.
+            // The halves split at the first one; a later one does nothing.
             MacroOp::PauseForRelease => {}
         }
     }

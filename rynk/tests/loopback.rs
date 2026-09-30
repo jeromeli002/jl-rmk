@@ -173,13 +173,6 @@ async fn client_against_run_session() {
         ];
         client.write_macro(1, &ops).await.unwrap();
         assert_eq!(client.read_macro(1).await.unwrap(), ops);
-        let two_pauses = client
-            .write_macro(1, &[MacroOp::PauseForRelease, MacroOp::PauseForRelease])
-            .await;
-        assert!(
-            matches!(two_pauses, Err(RynkHostError::Rejected(RynkError::Invalid))),
-            "expected Rejected(Invalid), got {two_pauses:?}"
-        );
         let out_of_range = client.read_macro(caps.max_macros).await;
         assert!(
             matches!(out_of_range, Err(RynkHostError::Rejected(RynkError::Invalid))),

@@ -24,8 +24,8 @@ morse_profile_max_num = 16
 max_patterns_per_key = 8
 # Maximum number of macros
 macro_max_num = 32
-# Maximum number of operations in one macro
-macro_max_size = 96
+# Bytes of macro memory shared by all macros
+macro_space_size = 256
 # Default debounce time in ms
 debounce_time = 20
 # Report channel size
@@ -70,7 +70,7 @@ Increasing the number of combos, forks, morses (tap dances), and macros will inc
 - `morse_profile_max_num`: Capacity of the morse profile table (the named profiles in `[behavior.morse.profiles]`, referenced by morse and tap-hold keys), default value is 16. This value must be between 0 and 255.
 - `max_patterns_per_key` : Maximum number of tap/hold patterns a morse key can handle, default value is 8. This value must be between 4 and 32. (Automatically raised to fit the largest `tap_actions` + `hold_actions` + `morse_actions` count among the configured morse keys.)
 - `macro_max_num`: Maximum number of macros, default value is 32. This value must be between 0 and 255.
-- `macro_max_size`: Maximum number of operations in one macro, default value is 96. This value must be between 0 and 255. Each `text` character counts as one operation. Raising it costs about 17 bytes of RAM per operation, even if no macro is that long. With Vial, Vial's macro memory is `macro_max_num + macro_max_size` bytes, so anything Vial lets you save fits.
+- `macro_space_size`: Bytes of memory all macros share, default value is 256. This value must be a multiple of 32 between 32 and 8192, and costs as many bytes of RAM. Saved macros take flash too, so a large value may need more [storage sectors](./storage). See [Keyboard macros](./keymap_configuration/keyboard_macros#limits) for how much a macro takes.
 
 ### Matrix Configuration
 

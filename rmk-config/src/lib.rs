@@ -25,6 +25,9 @@ pub use layout::{STOCK_WIDTHS, layout_blob_from_toml, layout_info_from_toml};
 pub(crate) mod light;
 pub(crate) mod storage;
 
+/// Bytes in one persisted macro chunk, shared by configuration and firmware.
+pub const MACRO_CHUNK_SIZE: usize = 32;
+
 /// Protocol-level capacity ceilings for wire-format Vec sizes.
 ///
 /// These define the maximum values any firmware may use for protocol
@@ -39,8 +42,8 @@ pub mod protocol_limits {
     pub const MAX_COMBO_SIZE: usize = 16;
     /// Max pattern entries per morse key — ceiling for `MORSE_SIZE`
     pub const MAX_MORSE_SIZE: usize = 32;
-    /// Max ops in one macro — ceiling for `MACRO_MAX_SIZE`
-    pub const MAX_MACRO_SIZE: usize = 255;
+    /// The u8 storage index addresses chunks 0 through 255.
+    pub const MAX_MACRO_SPACE_SIZE: usize = super::MACRO_CHUNK_SIZE * (u8::MAX as usize + 1);
     /// Max key positions in an unlock challenge.
     pub const MAX_UNLOCK_KEYS_SIZE: usize = 4;
 }
@@ -314,10 +317,10 @@ pub(crate) struct RmkConstantsConfig {
     #[serde_inline_default(32)]
     #[serde(deserialize_with = "check_macro_max_num")]
     pub macro_max_num: usize,
-    /// Maximum number of operations in one macro
-    #[serde_inline_default(96)]
-    #[serde(deserialize_with = "check_macro_max_size")]
-    pub macro_max_size: usize,
+    /// Bytes of the buffer every macro shares, a multiple of 32
+    #[serde_inline_default(256)]
+    #[serde(deserialize_with = "check_macro_space_size")]
+    pub macro_space_size: usize,
     /// Default debounce time in ms
     #[serde_inline_default(20)]
     pub debounce_time: u16,
@@ -378,15 +381,15 @@ where
     Ok(value)
 }
 
-fn check_macro_max_size<'de, D>(deserializer: D) -> Result<usize, D::Error>
+fn check_macro_space_size<'de, D>(deserializer: D) -> Result<usize, D::Error>
 where
     D: de::Deserializer<'de>,
 {
-    let value = Deserialize::deserialize(deserializer)?;
-    if value > protocol_limits::MAX_MACRO_SIZE {
+    let value: usize = Deserialize::deserialize(deserializer)?;
+    if value == 0 || value % MACRO_CHUNK_SIZE != 0 || value > protocol_limits::MAX_MACRO_SPACE_SIZE {
         return Err(de::Error::custom(format!(
-            "macro_max_size must be between 0 and {}, got {value}",
-            protocol_limits::MAX_MACRO_SIZE
+            "macro_space_size must be a multiple of {MACRO_CHUNK_SIZE} between {MACRO_CHUNK_SIZE} and {}, got {value}",
+            protocol_limits::MAX_MACRO_SPACE_SIZE
         )));
     }
     Ok(value)
@@ -459,7 +462,7 @@ impl Default for RmkConstantsConfig {
             morse_profile_max_num: 16,
             max_patterns_per_key: 8,
             macro_max_num: 32,
-            macro_max_size: 96,
+            macro_space_size: 256,
             debounce_time: 20,
             report_channel_size: 16,
             vial_channel_size: 4,
@@ -1609,6 +1612,23 @@ channel_size = 32
         assert_eq!(config.event.modifier.channel_size, 8);
         assert_eq!(config.event.modifier.subs, 2);
         assert_eq!(config.event.layer_change.subs, 1);
+    }
+
+    #[test]
+    fn macro_space_size_matches_chunk_index_capacity() {
+        for size in [32, 256, 1024, 1056, 8160, 8192] {
+            let config: KeyboardTomlConfig = toml::from_str(&format!("[rmk]\nmacro_space_size = {size}\n")).unwrap();
+            assert_eq!(config.build_constants(&[]).unwrap().macro_space_size, size);
+        }
+        for size in [0, 31, 33, 8191, 8193, 8224, 65535] {
+            let error =
+                toml::from_str::<KeyboardTomlConfig>(&format!("[rmk]\nmacro_space_size = {size}\n")).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("macro_space_size must be a multiple of 32 between 32 and 8192")
+            );
+        }
     }
 
     #[test]

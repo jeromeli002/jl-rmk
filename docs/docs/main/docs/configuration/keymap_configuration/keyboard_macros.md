@@ -22,12 +22,12 @@ Macros come from two places:
 
 ## Limits
 
-- A macro has at most `macro_max_size` operations (default 96); each text character counts as one.
+- All macros share `macro_space_size` bytes of memory (default 256). A text character takes 1 byte with Vial and 2 with Rynk, any other step up to 5.
 - A macro has at most one pause for release.
 - Text is ASCII only. For other characters, see [Special characters and unicode](./special_characters_and_unicode).
 - There are at most `macro_max_num` macros (default 32).
 
-Set `macro_max_size` and `macro_max_num` in the [`[rmk]`](../rmk_config#behavior-configuration) section. A default macro that breaks a limit fails the build, and a host tool can't save one.
+Set `macro_space_size` and `macro_max_num` in the [`[rmk]`](../rmk_config#behavior-configuration) section. Default macros that break a limit fail the build, and a host tool can't save one.
 
 ## Defining macros
 
@@ -89,9 +89,9 @@ Macros run one at a time: a macro triggered while another is running waits its t
 
 ## Editing macros from a host
 
-Rynk and Vial save edited macros to flash. Without the `storage` feature, macros can't be edited.
+Rynk and Vial save edited macros to flash. Without the `storage` feature, Rynk can't edit macros, and Vial's edits last until the keyboard restarts.
 
-Vial's macro memory is `macro_max_num + macro_max_size` bytes (default 128). A key step takes 3 or 4 bytes, a delay 4, a text character 1, and each macro 1 more. Vial can't show a pause for release, and it shows the macros in order until the memory is used; the macros after that appear empty. You can write a new macro into one of them, but to see or edit its steps, raise `macro_max_size` or use Rynk. Saving in Vial only writes the macros you changed, so the others keep the steps Vial can't show.
+Vial's macro memory is `macro_space_size` bytes. Vial can't show a pause for release: a macro you leave unchanged in Vial keeps its pause, and one you change loses it.
 
 ## Tips
 

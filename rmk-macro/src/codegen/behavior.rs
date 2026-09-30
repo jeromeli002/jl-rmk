@@ -261,7 +261,7 @@ fn expand_macros(macros: &Option<Macros>) -> proc_macro2::TokenStream {
             const MACROS: &[&[::rmk::types::keyboard_macros::MacroOp]] = &[#(#macros_def),*];
             const _: () = ::core::assert!(
                 ::rmk::types::keyboard_macros::validate_default_macros(MACROS),
-                "keyboard.toml: invalid [behavior.macro]: use at most `macro_max_num` macros, each with at most `macro_max_size` operations (each `text` character counts as one) and at most one `pause_for_release`; `text` must be ASCII"
+                "keyboard.toml: invalid [behavior.macro]: use at most `macro_max_num` macros that together fit `macro_space_size` bytes, each with at most one `pause_for_release`; `text` must be ASCII"
             );
             MACROS
         }

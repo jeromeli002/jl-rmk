@@ -13,8 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **BREAKING**: Keyboard macros are reworked around `MacroOp` lists. In Rust, `BehaviorConfig::keyboard_macros` is a `&'static [&'static [MacroOp]]` checked at compile time with `validate_default_macros`, `text!("...")` spells a text macro, and `define_macro_sequences`, `to_macro_sequence` and `MacroOperation` are gone. In `keyboard.toml`, `[rmk] macro_max_num` (default 32) and `macro_max_size` (default 96 operations) are the limits and Vial's macro memory is `macro_max_num + macro_max_size` bytes; `macro_space_size` and `protocol_macro_chunk_size` are removed, so a config that still sets them fails to build
-- **BREAKING**: Rynk protocol 0.2: `GetMacro`/`SetMacro` move one whole macro per call (`u8` index, `Macro`, `SetMacroRequest`); `DeviceCapabilities` gains `max_macros`, `macro_max_size` and `macros_writable` and loses `macro_space_size` and `macro_chunk_size`
+- **BREAKING**: Keyboard macros are reworked around `MacroOp` lists.
+- **BREAKING**: Bump Rynk protocol version to 0.2: now `GetMacro`/`SetMacro` read and write a whole macro by index.
 
 ### Added
 

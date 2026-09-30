@@ -9,7 +9,7 @@
 //! `#[doc(hidden)]` `rmk::test_support` gate for a few internal signals).
 
 /// Geometry of the simulated flash part: 4 KiB in 1 KiB sectors, a sector
-/// holding a macro of `macro_max_size` ops, written 4 bytes at a time.
+/// holding every chunk of the macro buffer, written 4 bytes at a time.
 #[cfg(feature = "storage")]
 pub type Flash = rmk::test_support::InMemoryFlash<4096, 1024, 4>;
 

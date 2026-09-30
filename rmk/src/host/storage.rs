@@ -1,5 +1,6 @@
 use embassy_time::Duration;
 use embedded_storage_async::nor_flash::NorFlash as AsyncNorFlash;
+use rmk_types::constants::MACRO_CHUNK_SIZE;
 
 use crate::keyboard::combo::Combo;
 use crate::storage::{Storage, StorageKey, StorageValue, print_storage_error};
@@ -45,6 +46,12 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
                 (StorageKey::DefaultLayer, StorageValue::DefaultLayer(layer)) => behavior.default_layer = layer,
                 // Restore the VIA/Vial layout options selection
                 (StorageKey::LayoutOption, StorageValue::LayoutOption(option)) => data.layout_option = option,
+                (StorageKey::MacroChunk(idx), StorageValue::MacroChunk(bytes)) => {
+                    if let Some(chunk) = data.macros.as_chunks_mut::<MACRO_CHUNK_SIZE>().0.get_mut(idx as usize) {
+                        *chunk = bytes;
+                        data.macros_stored = true;
+                    }
+                }
                 (StorageKey::BehaviorConfig, StorageValue::BehaviorConfig(c)) => {
                     behavior.morse.prior_idle_time = Duration::from_millis(c.prior_idle_time as u64);
                     behavior.morse.default_profile = c.morse_default_profile;

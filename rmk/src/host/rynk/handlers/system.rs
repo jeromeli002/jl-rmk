@@ -54,7 +54,7 @@ impl Handle<GetCapabilities> for RynkService<'_> {
             max_combos: constants::COMBO_MAX_NUM as u8,
             max_combo_keys: constants::COMBO_MAX_LENGTH as u8,
             max_macros: constants::MACRO_MAX_NUM as u8,
-            macro_max_size: constants::MACRO_MAX_SIZE as u8,
+            macro_space_size: constants::MACRO_SPACE_SIZE as u16,
             macros_writable: cfg!(feature = "storage"),
             max_morse: constants::MORSE_MAX_NUM as u8,
             max_patterns_per_key: constants::MAX_PATTERNS_PER_KEY as u8,

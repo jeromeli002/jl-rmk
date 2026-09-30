@@ -41,11 +41,11 @@ mod tests {
         round_trip(&SetMacroRequest { index: 3, macro_ops });
 
         // Max capacity, every op at its widest encoding.
-        let mut ops = heapless::Vec::new();
-        while ops.push(MacroOp::Delay(u16::MAX)).is_ok() {}
+        let mut macro_ops = Macro::new();
+        while macro_ops.push(MacroOp::Delay(u16::MAX)).is_ok() {}
         let full = SetMacroRequest {
             index: u8::MAX,
-            macro_ops: Macro(ops),
+            macro_ops,
         };
         round_trip(&full);
         assert_max_size_bound(&full);

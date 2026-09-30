@@ -31,7 +31,7 @@ features = ["storage", "_ble", "split"]
 steps = [
   { rynk = { cmd = "GetCapabilities", reply = {
     num_layers = 1, num_rows = 1, num_cols = 2, num_encoders = 0,
-    max_combos = 8, max_combo_keys = 4, max_macros = 32, macro_max_size = 96, macros_writable = true,
+    max_combos = 8, max_combo_keys = 4, max_macros = 32, macro_space_size = 256, macros_writable = true,
     max_morse = 8, max_patterns_per_key = 8, max_forks = 8,
     storage_enabled = true, lighting_enabled = false,
     is_split = true, num_split_peripherals = 1,

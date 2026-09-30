@@ -45,8 +45,9 @@ pub struct DeviceCapabilities {
     pub max_combo_keys: u8,
     /// Macro slots, `GetMacro`/`SetMacro` index below this.
     pub max_macros: u8,
-    /// Most ops in one macro.
-    pub macro_max_size: u8,
+    /// Bytes of the buffer every macro shares, in the postcard encoding
+    /// `GetMacro`/`SetMacro` carry, each slot costing its length prefix.
+    pub macro_space_size: u16,
     /// Whether `SetMacro` persists; a firmware without storage serves its
     /// compiled-in macros read-only.
     pub macros_writable: bool,
@@ -192,7 +193,7 @@ mod tests {
             max_combos: 16,
             max_combo_keys: 4,
             max_macros: 32,
-            macro_max_size: 32,
+            macro_space_size: 256,
             macros_writable: true,
             max_morse: 8,
             max_patterns_per_key: 8,
@@ -216,7 +217,7 @@ mod tests {
             max_combos: 0,
             max_combo_keys: 0,
             max_macros: 0,
-            macro_max_size: 0,
+            macro_space_size: 0,
             macros_writable: false,
             max_morse: 0,
             max_patterns_per_key: 0,
