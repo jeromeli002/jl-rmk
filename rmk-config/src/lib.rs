@@ -386,9 +386,9 @@ where
     D: de::Deserializer<'de>,
 {
     let value: usize = Deserialize::deserialize(deserializer)?;
-    if value == 0 || !value.is_multiple_of(MACRO_CHUNK_SIZE) || value > protocol_limits::MAX_MACRO_SPACE_SIZE {
+    if !value.is_multiple_of(MACRO_CHUNK_SIZE) || value > protocol_limits::MAX_MACRO_SPACE_SIZE {
         return Err(de::Error::custom(format!(
-            "macro_space_size must be a multiple of {MACRO_CHUNK_SIZE} between {MACRO_CHUNK_SIZE} and {}, got {value}",
+            "macro_space_size must be a multiple of {MACRO_CHUNK_SIZE} between 0 and {}, got {value}",
             protocol_limits::MAX_MACRO_SPACE_SIZE
         )));
     }

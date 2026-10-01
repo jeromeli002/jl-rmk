@@ -565,9 +565,10 @@ pub(crate) mod codec {
     /// Replace slot `k`'s ops with `bytes`, moving the slots after it; `None`
     /// when the buffer cannot hold the result. Returns the changed byte range.
     pub(crate) fn splice(buf: &mut [u8], k: usize, bytes: &[u8]) -> Option<Range<usize>> {
+        let last = crate::MACRO_MAX_NUM.checked_sub(1)?;
         let old = segment(buf, k);
         let start = if k == 0 { 0 } else { segment(buf, k - 1).end };
-        let used = segment(buf, crate::MACRO_MAX_NUM - 1).end;
+        let used = segment(buf, last).end;
         let mut prefix = [0; 3];
         let prefix = postcard::to_slice(&(bytes.len() as u16), &mut prefix).ok()?;
         let new_end = start + prefix.len() + bytes.len();
