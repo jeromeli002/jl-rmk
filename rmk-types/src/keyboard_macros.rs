@@ -143,8 +143,12 @@ const fn macro_size(ops: &[MacroOp]) -> usize {
             MacroOp::PauseForRelease => 0,
             // Vial splits a delay past its two-byte range in two.
             MacroOp::Delay(ms) if ms > 254 * 255 + 254 => 8,
-            // A key step or a delay.
-            _ => 4,
+            MacroOp::Delay(_) => 4,
+            MacroOp::Tap(action) | MacroOp::Press(action) | MacroOp::Release(action) => match action {
+                Action::Key(_) => 3,
+                Action::KeyWithModifier(_, modifiers) if modifiers.into_packed_bits() == 0 => 3,
+                _ => 4,
+            },
         };
         i += 1;
     }
