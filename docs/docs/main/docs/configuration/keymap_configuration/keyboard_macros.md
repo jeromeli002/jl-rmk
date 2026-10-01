@@ -27,7 +27,7 @@ Macros come from two places:
 - Text is ASCII only. For other characters, see [Special characters and unicode](./special_characters_and_unicode).
 - There are at most `macro_max_num` macros (default 32).
 
-Set `macro_space_size` and `macro_max_num` in the [`[rmk]`](../rmk_config#behavior-configuration) section. Default macros that break a limit fail the build, and a host tool can't save one.
+Set `macro_space_size` and `macro_max_num` in the [`[rmk]`](../rmk_config#behavior-configuration) section. Default macros that break a limit fail the build.
 
 ## Defining macros
 

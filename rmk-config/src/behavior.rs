@@ -43,8 +43,7 @@ impl crate::KeyboardTomlConfig {
                         }
                     }
                 }
-                // Macros are checked by the const assert the codegen emits, against the
-                // same rules the host write path applies.
+                // Default macros are checked by the const assert the codegen emits.
                 behavior.macros = behavior.macros.or(default.macros);
                 behavior.fork = behavior.fork.or(default.fork);
                 if let Some(fork) = &behavior.fork
