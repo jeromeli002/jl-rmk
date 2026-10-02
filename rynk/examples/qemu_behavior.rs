@@ -281,6 +281,7 @@ async fn script(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
             ble: BleStatus {
                 profile: 0,
                 state: BleState::Inactive,
+                bonded: false,
             },
             preferred: ConnectionType::Usb,
         }
