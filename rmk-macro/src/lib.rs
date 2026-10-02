@@ -23,6 +23,16 @@ pub fn run_tests(input: TokenStream) -> TokenStream {
     codegen::simulator::expand_run_tests(dir).into()
 }
 
+/// The macro ops that type an ASCII string: `text!("ab")` is
+/// `[MacroOp::Char(b'a'), MacroOp::Char(b'b')]`.
+#[proc_macro]
+pub fn text(input: TokenStream) -> TokenStream {
+    let text = parse_macro_input!(input as syn::LitStr)
+        .value()
+        .into_bytes();
+    quote::quote! { [#(::rmk::types::keyboard_macros::MacroOp::Char(#text)),*] }.into()
+}
+
 #[proc_macro_attribute]
 pub fn rmk_keyboard(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let item_mod = parse_macro_input!(item as syn::ItemMod);

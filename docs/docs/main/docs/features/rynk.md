@@ -167,8 +167,7 @@ attacker who reaches it another way.
 Rynk's firmware buffers size themselves automatically and rarely need touching.
 There are several parameters in `keyboard.toml`'s [`[rmk]`](../configuration/rmk_config#rynk-protocol-configuration) section that you can adjust:
 
-- `rynk_buffer_size`: the exact RAM of each Rynk frame buffer, holding one COBS-encoded wire frame. The payload a message can carry is what remains after framing overhead and the 3-byte header. A larger buffer moves more per round-trip at the cost of RAM.
-- `protocol_macro_chunk_size`: macro chunk size.
+- `rynk_buffer_size`: the exact RAM of each Rynk frame buffer, holding one COBS-encoded wire frame. The payload a message can carry is what remains after framing overhead and the 3-byte header. A larger buffer moves more per round-trip at the cost of RAM. It must also fit one whole macro, `macro_space_size` bytes, or the build fails.
 
 Bulk transfers (faster multi-entry reads and writes) are always available with
 `rynk` — there's no separate feature to enable. Their batch size is derived from

@@ -42,7 +42,7 @@ Each peer holds one frame in a buffer of `rynk_buffer_size` bytes (a `[rmk]` opt
 
 `DeviceCapabilities` also advertises `bulk_transfer_supported` and the paging strides `max_bulk_keys` (worst-case keys per `GetKeymapBulk` page) and `max_bulk_items` (worst-case entries per `GetComboBulk`/`GetMorseBulk` page). A bulk read names a start — for the keymap `(layer, row, col)`, read forward through the flat row-major, layer-major keymap; for combos and morses a slot index — and returns as many consecutive entries as fit in one payload, or fewer at the end. A host pages by advancing its start by the stride; a short page ends the read. A bulk write carries a start plus a list of entries and is packed by encoded size up to `max_payload_size`. A reply that does not fit beside other pipelined requests answers `Busy`; retry once they complete.
 
-`GetLayout` serves the compressed layout blob 244 bytes per call: the request is a byte offset and `LayoutChunk` carries `total_len` plus that page's bytes. Macros move in `macro_chunk_size` pieces (`protocol_macro_chunk_size` in `[rmk]`) addressed by byte offset.
+`GetLayout` serves the compressed layout blob 244 bytes per call: the request is a byte offset and `LayoutChunk` carries `total_len` plus that page's bytes. `GetMacro`/`SetMacro` move one whole macro per call, a `MacroOp` list indexed below `max_macros`; every macro shares one buffer of `macro_space_size` bytes, in the list's postcard encoding plus a length prefix per slot, so a write that no longer fits answers `Invalid`; `macros_writable` is false on a firmware without storage, whose `SetMacro` answers `Unimplemented`.
 
 ## Errors
 
@@ -52,7 +52,7 @@ A request's response is postcard `Result<T, RynkError>`; the `Err` side is one o
 | --------------- | --------------------------------------------------------------------------------------------------------------- |
 | `Malformed`     | The request could not be decoded.                                                                               |
 | `NotReady`      | The device is not in a state to satisfy the request.                                                            |
-| `StorageFault`  | Persistent storage failed on a write (flash erase/write error).                                                 |
+| `StorageFault`  | Persistent storage failed (flash read, write or erase error).                                                   |
 | `Internal`      | Internal firmware fault.                                                                                        |
 | `Unimplemented` | The command is recognized but its handler is not implemented yet.                                               |
 | `Invalid`       | The request decoded cleanly but is semantically invalid (out-of-range index, bad value).                        |
@@ -88,7 +88,7 @@ The lock is per session and starts locked; `Lock` or the end of the session (unp
 | `0x0106` | `SetEncoderAction`    | `SetEncoderRequest`    | `()`                    |         |                                                                                     |
 | `0x0107` | `GetKeymapBulk`       | `GetKeymapBulkRequest` | `GetKeymapBulkResponse` |         |                                                                                     |
 | `0x0108` | `SetKeymapBulk`       | `SetKeymapBulkRequest` | `()`                    |         |                                                                                     |
-| `0x0201` | `GetMacro`            | `GetMacroRequest`      | `MacroData`             |         |                                                                                     |
+| `0x0201` | `GetMacro`            | `u8`                   | `Macro`                 |         |                                                                                     |
 | `0x0202` | `SetMacro`            | `SetMacroRequest`      | `()`                    |         |                                                                                     |
 | `0x0301` | `GetCombo`            | `u8`                   | `Combo`                 |         |                                                                                     |
 | `0x0302` | `SetCombo`            | `SetComboRequest`      | `()`                    |         |                                                                                     |

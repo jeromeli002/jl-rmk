@@ -262,7 +262,11 @@ impl<'a> Keyboard<'a> {
         // Trigger all non morse keys in the buffer
         while let Some(key) = self.held_buffer.remove_if(|k| !k.action.is_morse()) {
             debug!("Trigger non-morse key: {:?}", key);
-            let action = self.keymap.get_action_with_layer_cache(key.event);
+            let action = if key.event.pos.is_physical() {
+                self.keymap.get_action_with_layer_cache(key.event)
+            } else {
+                key.action
+            };
             match action {
                 KeyAction::Single(action) => self.process_key_action_normal(action, key.event).await,
                 KeyAction::Tap(action) => self.process_key_action_tap(action, key.event).await,
