@@ -95,6 +95,8 @@ pub(crate) fn to_via_keycode(key_action: KeyAction) -> u16 {
             0
         }
         KeyAction::TapHold(tap, hold, _) => match hold {
+            // Layer tap toggle: tap toggles layer `l`, hold activates it momentarily
+            Action::LayerOn(l) if tap == Action::LayerToggle(l) && l < 32 => 0x52C0 | l as u16,
             Action::LayerOn(l) => {
                 if l > 16 {
                     0
@@ -194,9 +196,9 @@ pub(crate) fn from_via_keycode(via_keycode: u16) -> KeyAction {
             KeyAction::Single(Action::OneShotModifier(m))
         }
         0x52C0..=0x52DF => {
-            // TODO: Layer tap toggle
-            warn!("Layer tap toggle {:#X} not supported", via_keycode);
-            KeyAction::No
+            // Layer tap toggle: tap toggles the layer, hold activates it momentarily
+            let layer = via_keycode as u8 & 0x1F;
+            KeyAction::TapHold(Action::LayerToggle(layer), Action::LayerOn(layer), u8::MAX)
         }
         0x52E0..=0x52FF => {
             // Persistent default layer (PDF)
@@ -598,6 +600,27 @@ mod test {
         // Morse(255)
         let via_keycode = 0x57FF;
         assert_eq!(KeyAction::Morse(255), from_via_keycode(via_keycode));
+    }
+
+    #[test]
+    fn test_convert_layer_tap_toggle() {
+        // TT(1)
+        let tt = KeyAction::TapHold(Action::LayerToggle(1), Action::LayerOn(1), u8::MAX);
+        assert_eq!(tt, from_via_keycode(0x52C1));
+        assert_eq!(0x52C1, to_via_keycode(tt));
+
+        // TT(31), the highest layer the keycode can carry
+        let tt = KeyAction::TapHold(Action::LayerToggle(31), Action::LayerOn(31), u8::MAX);
+        assert_eq!(tt, from_via_keycode(0x52DF));
+        assert_eq!(0x52DF, to_via_keycode(tt));
+
+        // Toggling a different layer than the hold activates is not TT
+        let mixed = KeyAction::TapHold(Action::LayerToggle(2), Action::LayerOn(1), u8::MAX);
+        assert_eq!(0x4100, to_via_keycode(mixed));
+
+        // LT(1, KC_NO) must stay a layer tap
+        let lt = KeyAction::TapHold(Action::Key(KeyCode::Hid(HidKeyCode::No)), Action::LayerOn(1), u8::MAX);
+        assert_eq!(0x4100, to_via_keycode(lt));
     }
 
     #[test]
