@@ -87,29 +87,6 @@ fn bond_info_of(bonded_devices: &[ProfileInfo], slot_num: u8) -> Option<&Profile
         .find(|info| !info.removed && info.slot_num == slot_num)
 }
 
-/// Upserts bonding information for a profile slot.
-///
-/// Returns `Ok(true)` if the entry was inserted, changed, or revived from
-/// `removed`, `Ok(false)` if a live entry already held the same info, and
-/// `Err(())` if the cache is full.
-fn upsert_bond_info<const SLOTS: usize>(
-    bonded_devices: &mut heapless::Vec<ProfileInfo, SLOTS>,
-    profile_info: &ProfileInfo,
-) -> Result<bool, ()> {
-    if let Some(index) = bonded_devices
-        .iter()
-        .position(|info| info.slot_num == profile_info.slot_num)
-    {
-        if !bonded_devices[index].removed && bonded_devices[index].info == profile_info.info {
-            return Ok(false);
-        }
-        bonded_devices[index] = profile_info.clone();
-    } else {
-        bonded_devices.push(profile_info.clone()).map_err(|_| ())?;
-    }
-    Ok(true)
-}
-
 /// BLE profile switch action
 #[derive(Debug)]
 pub(crate) enum BleProfileAction {
@@ -243,21 +220,24 @@ where
 
     /// Add/update bonding information
     pub(crate) async fn add_profile_info(&mut self, profile_info: ProfileInfo) {
-        match upsert_bond_info(&mut self.bonded_devices, &profile_info) {
-            Ok(false) => {
+        if let Some(info) = self
+            .bonded_devices
+            .iter_mut()
+            .find(|info| info.slot_num == profile_info.slot_num)
+        {
+            if !info.removed && info.info == profile_info.info {
                 info!("Skip saving same bonding info");
                 return;
             }
-            Ok(true) => {}
-            Err(()) => {
-                // Nothing entered the cache, so skip the flash write too: persisting a
-                // bond the cache rejected would leave flash holding an entry RAM lacks.
-                error!(
-                    "Failed to add bond info for profile {}: cache is full",
-                    profile_info.slot_num
-                );
-                return;
-            }
+            *info = profile_info.clone();
+        } else if self.bonded_devices.push(profile_info.clone()).is_err() {
+            // Nothing entered the cache, so skip the flash write too: persisting a
+            // bond the cache rejected would leave flash holding an entry RAM lacks.
+            error!(
+                "Failed to add bond info for profile {}: cache is full",
+                profile_info.slot_num
+            );
+            return;
         }
 
         self.update_stack_bonds();
@@ -412,39 +392,75 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{LongTermKey, ProfileInfo, bond_info_of, upsert_bond_info};
+    use bt_hci::controller::ExternalController;
+    use bt_hci::transport::{PacketToController, PacketToHost, Transport};
+    use embassy_futures::select::select;
 
-    #[test]
-    fn cleared_profile_can_be_paired_again_with_same_bond_information() {
-        let profile_info = ProfileInfo::default();
-        let mut bonded_devices = heapless::Vec::<ProfileInfo, 1>::new();
+    use super::{DefaultPacketPool, HostResources, LongTermKey, ProfileInfo, ProfileManager, bond_info_of};
+    use crate::test_support::{drain_flash_channel, test_block_on};
 
-        assert_eq!(upsert_bond_info(&mut bonded_devices, &profile_info), Ok(true));
-        assert_eq!(upsert_bond_info(&mut bonded_devices, &profile_info), Ok(false));
+    struct TestTransport;
 
-        bonded_devices[0].removed = true;
-        assert_eq!(upsert_bond_info(&mut bonded_devices, &profile_info), Ok(true));
-        assert!(!bonded_devices[0].removed);
+    impl embedded_io_async::ErrorType for TestTransport {
+        type Error = bt_hci::ReadHciError<core::convert::Infallible>;
+    }
+
+    impl Transport for TestTransport {
+        async fn read<'a, P: PacketToHost<'a>>(&self, _: &'a mut [u8]) -> Result<P, Self::Error> {
+            panic!("unexpected controller read");
+        }
+
+        async fn write<P: PacketToController>(&self, _: &P) -> Result<(), Self::Error> {
+            panic!("unexpected controller write");
+        }
+    }
+
+    type TestManager<'b, 's, const SLOTS: usize> =
+        ProfileManager<'b, 's, ExternalController<TestTransport, 1>, DefaultPacketPool, SLOTS>;
+
+    fn with_manager<const SLOTS: usize>(test: impl FnOnce(&mut TestManager<'_, '_, SLOTS>)) {
+        let mut resources = HostResources::<DefaultPacketPool, 1, 1>::new();
+        let stack = trouble_host::new(ExternalController::<_, 1>::new(TestTransport), &mut resources).build();
+        let mut manager = ProfileManager::new(&stack);
+        test(&mut manager);
+    }
+
+    fn add_profile<const SLOTS: usize>(manager: &mut TestManager<'_, '_, SLOTS>, info: ProfileInfo) {
+        test_block_on(select(manager.add_profile_info(info), drain_flash_channel()));
     }
 
     #[test]
-    fn upsert_fails_without_evicting_when_the_cache_is_full() {
-        let mut bonded_devices = heapless::Vec::<ProfileInfo, 1>::new();
-        assert_eq!(upsert_bond_info(&mut bonded_devices, &ProfileInfo::default()), Ok(true));
+    fn cleared_profile_can_be_paired_again_with_same_bond_information() {
+        with_manager::<1>(|manager| {
+            let profile_info = ProfileInfo::default();
+            add_profile(manager, profile_info.clone());
+            test_block_on(manager.add_profile_info(profile_info.clone()));
 
-        let other_slot = ProfileInfo {
-            slot_num: 1,
-            ..Default::default()
-        };
-        assert_eq!(upsert_bond_info(&mut bonded_devices, &other_slot), Err(()));
-        assert_eq!(bonded_devices.len(), 1);
-        assert_eq!(bonded_devices[0].slot_num, 0);
+            manager.bonded_devices[0].removed = true;
+            add_profile(manager, profile_info);
+            assert!(!manager.bonded_devices[0].removed);
+            assert_eq!(manager.bonded_devices.len(), 1);
+        });
+    }
+
+    #[test]
+    fn full_cache_rejects_new_profile_without_saving_or_evicting() {
+        with_manager::<1>(|manager| {
+            add_profile(manager, ProfileInfo::default());
+            let other_slot = ProfileInfo {
+                slot_num: 1,
+                ..Default::default()
+            };
+            test_block_on(manager.add_profile_info(other_slot));
+            assert_eq!(manager.bonded_devices.len(), 1);
+            assert_eq!(manager.bonded_devices[0].slot_num, 0);
+        });
     }
 
     #[test]
     fn cleared_slot_has_no_bond_info() {
         let mut bonded_devices = heapless::Vec::<ProfileInfo, 1>::new();
-        assert_eq!(upsert_bond_info(&mut bonded_devices, &ProfileInfo::default()), Ok(true));
+        bonded_devices.push(ProfileInfo::default()).unwrap();
         assert!(bond_info_of(&bonded_devices, 0).is_some());
 
         bonded_devices[0].removed = true;
@@ -454,7 +470,7 @@ mod tests {
     #[test]
     fn bonding_one_slot_leaves_the_others_unbonded() {
         let mut bonded_devices = heapless::Vec::<ProfileInfo, 2>::new();
-        assert_eq!(upsert_bond_info(&mut bonded_devices, &ProfileInfo::default()), Ok(true));
+        bonded_devices.push(ProfileInfo::default()).unwrap();
 
         assert!(bond_info_of(&bonded_devices, 0).is_some());
         assert!(bond_info_of(&bonded_devices, 1).is_none());
@@ -462,12 +478,13 @@ mod tests {
 
     #[test]
     fn re_pairing_a_slot_with_different_bond_information_replaces_it() {
-        let mut bonded_devices = heapless::Vec::<ProfileInfo, 1>::new();
-        assert_eq!(upsert_bond_info(&mut bonded_devices, &ProfileInfo::default()), Ok(true));
-
-        let mut new_host = ProfileInfo::default();
-        new_host.info.ltk = LongTermKey(1);
-        assert_eq!(upsert_bond_info(&mut bonded_devices, &new_host), Ok(true));
-        assert_eq!(bonded_devices[0].info.ltk, LongTermKey(1));
+        with_manager::<1>(|manager| {
+            add_profile(manager, ProfileInfo::default());
+            let mut new_host = ProfileInfo::default();
+            new_host.info.ltk = LongTermKey(1);
+            add_profile(manager, new_host);
+            assert_eq!(manager.bonded_devices[0].info.ltk, LongTermKey(1));
+            assert_eq!(manager.bonded_devices.len(), 1);
+        });
     }
 }
