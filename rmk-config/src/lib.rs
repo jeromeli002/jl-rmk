@@ -1616,17 +1616,17 @@ channel_size = 32
 
     #[test]
     fn macro_space_size_matches_chunk_index_capacity() {
-        for size in [32, 256, 1024, 1056, 8160, 8192] {
+        for size in [0, 32, 256, 1024, 1056, 8160, 8192] {
             let config: KeyboardTomlConfig = toml::from_str(&format!("[rmk]\nmacro_space_size = {size}\n")).unwrap();
             assert_eq!(config.build_constants(&[]).unwrap().macro_space_size, size);
         }
-        for size in [0, 31, 33, 8191, 8193, 8224, 65535] {
+        for size in [31, 33, 8191, 8193, 8224, 65535] {
             let error =
                 toml::from_str::<KeyboardTomlConfig>(&format!("[rmk]\nmacro_space_size = {size}\n")).unwrap_err();
             assert!(
                 error
                     .to_string()
-                    .contains("macro_space_size must be a multiple of 32 between 32 and 8192")
+                    .contains("macro_space_size must be a multiple of 32 between 0 and 8192")
             );
         }
     }
