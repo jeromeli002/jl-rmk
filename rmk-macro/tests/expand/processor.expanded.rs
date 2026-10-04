@@ -751,19 +751,16 @@ mod deadline {
             self.on_key_event(event).await
         }
     }
-    impl ::rmk::processor::DeadlineProcessor for Blinker {
-        fn next_deadline(&self) -> Option<::embassy_time::Instant> {
-            Self::deadline(self)
-        }
-        async fn handle_deadline(&mut self) {
-            Self::on_deadline(self).await;
-        }
-    }
     impl ::rmk::core_traits::Runnable for Blinker {
         async fn run(&mut self) -> ! {
-            use ::rmk::processor::DeadlineProcessor;
-            self.deadline_loop().await
+            ::rmk::processor::DeadlineProcessor::deadline_loop(self).await
         }
+    }
+    impl rmk::processor::DeadlineProcessor for Blinker {
+        fn deadline(&self) -> Option<rmk::embassy_time::Instant> {
+            None
+        }
+        async fn on_deadline(&mut self) {}
     }
 }
 /// Independent timing sources can be declared on sibling attributes.
@@ -945,18 +942,16 @@ mod polling_deadline {
             self.poll().await;
         }
     }
-    impl ::rmk::processor::DeadlineProcessor for StatusDisplay {
-        fn next_deadline(&self) -> Option<::embassy_time::Instant> {
-            Self::deadline(self)
-        }
-        async fn handle_deadline(&mut self) {
-            Self::on_deadline(self).await;
-        }
-    }
     impl ::rmk::core_traits::Runnable for StatusDisplay {
         async fn run(&mut self) -> ! {
             ::rmk::processor::DeadlineProcessor::polling_deadline_loop(self).await
         }
+    }
+    impl rmk::processor::DeadlineProcessor for StatusDisplay {
+        fn deadline(&self) -> Option<rmk::embassy_time::Instant> {
+            None
+        }
+        async fn on_deadline(&mut self) {}
     }
 }
 mod timer_only {
@@ -995,19 +990,16 @@ mod timer_only {
             match event {}
         }
     }
-    impl ::rmk::processor::DeadlineProcessor for Deadline {
-        fn next_deadline(&self) -> Option<::embassy_time::Instant> {
-            Self::deadline(self)
-        }
-        async fn handle_deadline(&mut self) {
-            Self::on_deadline(self).await;
-        }
-    }
     impl ::rmk::core_traits::Runnable for Deadline {
         async fn run(&mut self) -> ! {
-            use ::rmk::processor::DeadlineProcessor;
-            self.deadline_loop().await
+            ::rmk::processor::DeadlineProcessor::deadline_loop(self).await
         }
+    }
+    impl rmk::processor::DeadlineProcessor for Deadline {
+        fn deadline(&self) -> Option<rmk::embassy_time::Instant> {
+            None
+        }
+        async fn on_deadline(&mut self) {}
     }
     pub struct Both;
     impl ::rmk::processor::Processor for Both {
@@ -1027,18 +1019,16 @@ mod timer_only {
             self.poll().await;
         }
     }
-    impl ::rmk::processor::DeadlineProcessor for Both {
-        fn next_deadline(&self) -> Option<::embassy_time::Instant> {
-            Self::deadline(self)
-        }
-        async fn handle_deadline(&mut self) {
-            Self::on_deadline(self).await;
-        }
-    }
     impl ::rmk::core_traits::Runnable for Both {
         async fn run(&mut self) -> ! {
             ::rmk::processor::DeadlineProcessor::polling_deadline_loop(self).await
         }
+    }
+    impl rmk::processor::DeadlineProcessor for Both {
+        fn deadline(&self) -> Option<rmk::embassy_time::Instant> {
+            None
+        }
+        async fn on_deadline(&mut self) {}
     }
     #[::rmk::macros::runnable_generated]
     pub struct Custom;

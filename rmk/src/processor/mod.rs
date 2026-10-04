@@ -1,9 +1,13 @@
 //! Process keyboard events and schedule periodic work or state-dependent timeouts.
 //!
-//! Use `#[processor]` to generate the traits and run loop for a processor.
+//! Use `#[processor]` to generate event handling and the run loop.
+//! Implement [`DeadlineProcessor`] to supply deadline behavior.
 //! Implement [`Runnable`] yourself when you need a different run loop.
 
 pub mod builtin;
+
+#[cfg(test)]
+mod tests;
 
 use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_time::{Instant, Timer};
@@ -68,27 +72,27 @@ pub trait PollingProcessor: Processor {
 
 /// Schedules a timeout from the processor's current state.
 ///
-/// Use `#[processor(deadline)]` and provide inherent `deadline()` and
-/// `on_deadline()` methods. The macro maps them to [`next_deadline`](Self::next_deadline)
-/// and [`handle_deadline`](Self::handle_deadline), then generates the run loop.
+/// Implement [`deadline`](Self::deadline) and [`on_deadline`](Self::on_deadline)
+/// directly on this trait. Add `deadline` to `#[processor]` to generate a run loop
+/// that calls the trait methods. TOML and Rust projects use the same implementation.
 ///
 /// Return `None` to disable the timeout. After it fires, clear or advance it.
 /// To also poll, add `poll_interval` and provide `poll()`.
 pub trait DeadlineProcessor: Processor {
-    /// The next moment at which [`handle_deadline`](Self::handle_deadline) should
+    /// The next moment at which [`on_deadline`](Self::on_deadline) should
     /// fire, or `None` when no timeout is currently armed.
-    fn next_deadline(&self) -> Option<Instant>;
+    fn deadline(&self) -> Option<Instant>;
 
-    /// Called when the deadline returned by [`next_deadline`](Self::next_deadline)
+    /// Called when the deadline returned by [`deadline`](Self::deadline)
     /// elapses. Clear or advance the deadline before returning to avoid firing again immediately.
-    async fn handle_deadline(&mut self);
+    async fn on_deadline(&mut self);
 
     /// Loop that interleaves event processing with a dynamic deadline timer.
     async fn deadline_loop(&mut self) -> ! {
         let mut sub = Self::subscriber();
         loop {
-            match select(wait_for_deadline(self.next_deadline()), sub.next_event()).await {
-                Either::First(_) => self.handle_deadline().await,
+            match select(wait_for_deadline(self.deadline()), sub.next_event()).await {
+                Either::First(_) => self.on_deadline().await,
                 Either::Second(event) => self.process(event).await,
             }
         }
@@ -105,8 +109,8 @@ pub trait DeadlineProcessor: Processor {
         let mut sub = Self::subscriber();
         let mut ticker = embassy_time::Ticker::every(self.interval());
         loop {
-            match select3(wait_for_deadline(self.next_deadline()), ticker.next(), sub.next_event()).await {
-                Either3::First(_) => self.handle_deadline().await,
+            match select3(wait_for_deadline(self.deadline()), ticker.next(), sub.next_event()).await {
+                Either3::First(_) => self.on_deadline().await,
                 Either3::Second(_) => self.update().await,
                 Either3::Third(event) => self.process(event).await,
             }

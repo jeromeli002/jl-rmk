@@ -100,7 +100,7 @@ To also react to events, add `subscribe = [...]` and the corresponding event han
 
 ## Deadline processor
 
-Use `deadline` for a timeout that can be reset or cancelled. Provide these methods:
+Use `deadline` for a timeout that can be reset or cancelled. Implement `DeadlineProcessor` with these methods:
 
 - `fn deadline(&self) -> Option<Instant>` returns the next timeout, or `None` when no timeout is armed.
 - `async fn on_deadline(&mut self)` handles the timeout and clears or advances it.
@@ -111,6 +111,7 @@ This example marks pointing activity as inactive 500 ms after the last `Pointing
 use embassy_time::{Duration, Instant};
 use rmk::event::PointingEvent;
 use rmk::macros::processor;
+use rmk::processor::DeadlineProcessor;
 
 #[processor(subscribe = [PointingEvent], deadline)]
 #[derive(Default)]
@@ -124,7 +125,9 @@ impl MotionActivity {
         self.active = true;
         self.armed_until = Some(Instant::now() + Duration::from_millis(500));
     }
+}
 
+impl DeadlineProcessor for MotionActivity {
     fn deadline(&self) -> Option<Instant> {
         self.armed_until
     }
@@ -136,11 +139,13 @@ impl MotionActivity {
 }
 ```
 
+The same `impl DeadlineProcessor` works in TOML and Rust projects. The macro generates the run loop and calls the trait methods; it does not generate a forwarding implementation.
+
 An event handler can reset the timeout by storing a later deadline, or cancel it by setting the deadline to `None`. The task checks the deadline again after each callback. A deadline-only processor can omit `subscribe`; its initial state must arm the first timeout.
 
 ### Combine polling and deadlines
 
-Set both `poll_interval` and `deadline` on the same `#[processor]` attribute. Provide `poll()`, `deadline()`, and `on_deadline()`; either polling or an event handler can arm a timeout.
+Set both `poll_interval` and `deadline` on the same `#[processor]` attribute. Keep `poll()` in the inherent implementation and `deadline()` / `on_deadline()` in `impl DeadlineProcessor`. Either polling or an event handler can arm a timeout.
 
 Callbacks run one at a time. When several sources are ready, RMK handles deadlines first, polling ticks second, and events third. Clear or advance a deadline in `on_deadline()` to avoid calling it repeatedly for the same expired timeout.
 
@@ -174,17 +179,17 @@ Event names use snake case: `LayerChangeEvent` maps to `on_layer_change_event`, 
 
 ## Attribute reference
 
-| Option                         | Required methods                                                              | Behavior                                                  |
-| ------------------------------ | ----------------------------------------------------------------------------- | --------------------------------------------------------- |
-| `subscribe = [EventType, ...]` | `async fn on_<event_name>_event(&mut self, event: EventType)` for each event  | Handle events as they arrive.                             |
-| `poll_interval = <ms>`         | `async fn poll(&mut self)`                                                    | Run periodic work at a positive interval in milliseconds. |
-| `deadline`                     | `fn deadline(&self) -> Option<Instant>` and `async fn on_deadline(&mut self)` | Handle a timeout determined by the processor's state.     |
+| Option                         | Required methods                                                             | Behavior                                                  |
+| ------------------------------ | ---------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `subscribe = [EventType, ...]` | `async fn on_<event_name>_event(&mut self, event: EventType)` for each event | Handle events as they arrive.                             |
+| `poll_interval = <ms>`         | `async fn poll(&mut self)`                                                   | Run periodic work at a positive interval in milliseconds. |
+| `deadline`                     | Implement `DeadlineProcessor::deadline()` and `on_deadline()`                | Handle a timeout determined by the processor's state.     |
 
 You can combine these options. Omit `subscribe` or set it to `[]` when no events are needed. At least one event or timer source is required unless you provide a custom `Runnable`.
 
 ## Custom Runnable
 
-To provide your own run loop, implement `rmk::core_traits::Runnable` and place `#[rmk::macros::runnable_generated]` below `#[processor]`. The marker suppresses the generated run loop; the macro still implements the requested processor traits. A bare `#[processor]` is valid with this marker.
+To provide your own run loop, implement `rmk::core_traits::Runnable` and place `#[rmk::macros::runnable_generated]` below `#[processor]`. The marker suppresses the generated run loop; the macro still implements `Processor` and any configured `PollingProcessor`. Deadline behavior remains in your `impl DeadlineProcessor`. A bare `#[processor]` is valid with this marker.
 
 Combining `deadline` with `#[input_device]` requires a custom run loop. Choose how that loop schedules input reads, event handling, and timeouts.
 

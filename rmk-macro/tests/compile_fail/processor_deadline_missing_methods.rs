@@ -2,6 +2,7 @@ extern crate self as embassy_time;
 
 pub use rmk::embassy_time::Instant;
 use rmk::event::{EventSubscriber, SubscribableEvent};
+use rmk::processor::DeadlineProcessor;
 use rmk_macro::processor;
 
 #[derive(Clone)]
@@ -26,6 +27,9 @@ struct MissingDeadline;
 
 impl MissingDeadline {
     async fn on_tick_event(&mut self, _: TickEvent) {}
+}
+
+impl DeadlineProcessor for MissingDeadline {
     async fn on_deadline(&mut self) {}
 }
 
@@ -34,8 +38,22 @@ struct MissingHandler;
 
 impl MissingHandler {
     async fn on_tick_event(&mut self, _: TickEvent) {}
+}
+
+impl DeadlineProcessor for MissingHandler {
     fn deadline(&self) -> Option<Instant> {
         None
+    }
+}
+
+#[processor(subscribe = [TickEvent], deadline)]
+struct MissingImplementation;
+
+impl MissingImplementation {
+    async fn on_tick_event(&mut self, _: TickEvent) {}
+
+    async fn deadline_loop(&mut self) -> ! {
+        core::future::pending().await
     }
 }
 

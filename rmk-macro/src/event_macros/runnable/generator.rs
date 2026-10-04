@@ -103,8 +103,7 @@ pub fn generate_runnable(
             }
         } else if has_deadline {
             quote! {
-                use ::rmk::processor::DeadlineProcessor;
-                self.deadline_loop().await
+                ::rmk::processor::DeadlineProcessor::deadline_loop(self).await
             }
         } else if has_polling {
             quote! {

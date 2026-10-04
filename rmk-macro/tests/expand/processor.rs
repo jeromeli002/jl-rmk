@@ -80,6 +80,13 @@ mod deadline {
     pub struct Blinker {
         pub armed: bool,
     }
+
+    impl rmk::processor::DeadlineProcessor for Blinker {
+        fn deadline(&self) -> Option<rmk::embassy_time::Instant> {
+            None
+        }
+        async fn on_deadline(&mut self) {}
+    }
 }
 
 /// Independent timing sources can be declared on sibling attributes.
@@ -89,6 +96,13 @@ mod polling_deadline {
     #[processor(subscribe = [KeyEvent], poll_interval = 100)]
     #[processor(subscribe = [ConfigEvent], deadline)]
     pub struct StatusDisplay;
+
+    impl rmk::processor::DeadlineProcessor for StatusDisplay {
+        fn deadline(&self) -> Option<rmk::embassy_time::Instant> {
+            None
+        }
+        async fn on_deadline(&mut self) {}
+    }
 }
 
 mod timer_only {
@@ -100,9 +114,23 @@ mod timer_only {
     #[processor(subscribe = [], deadline)]
     pub struct Deadline;
 
+    impl rmk::processor::DeadlineProcessor for Deadline {
+        fn deadline(&self) -> Option<rmk::embassy_time::Instant> {
+            None
+        }
+        async fn on_deadline(&mut self) {}
+    }
+
     #[processor]
     #[processor(poll_interval = 100, deadline)]
     pub struct Both;
+
+    impl rmk::processor::DeadlineProcessor for Both {
+        fn deadline(&self) -> Option<rmk::embassy_time::Instant> {
+            None
+        }
+        async fn on_deadline(&mut self) {}
+    }
 
     #[processor]
     #[::rmk::macros::runnable_generated]

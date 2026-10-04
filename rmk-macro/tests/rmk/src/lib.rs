@@ -198,10 +198,10 @@ pub mod processor {
     /// Trait for processors driven by a dynamic deadline in addition to events
     pub trait DeadlineProcessor: Processor {
         /// The next moment `on_deadline` should fire, or `None` when nothing is armed
-        fn next_deadline(&self) -> Option<crate::embassy_time::Instant>;
+        fn deadline(&self) -> Option<crate::embassy_time::Instant>;
 
         /// Called when the deadline elapses without an intervening event
-        fn handle_deadline(&mut self) -> impl core::future::Future<Output = ()>;
+        fn on_deadline(&mut self) -> impl core::future::Future<Output = ()>;
 
         /// Loop that interleaves event processing with the deadline
         async fn deadline_loop(&mut self) -> ! {

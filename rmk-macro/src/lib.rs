@@ -170,8 +170,9 @@ pub fn event(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 /// Implements event handling and timer scheduling for a struct.
 ///
-/// The macro generates `Processor` and `Runnable`, plus the traits required by
-/// the selected timer options. Construct an instance and run it with `run_all!`,
+/// The macro generates `Processor` and `Runnable`, plus `PollingProcessor` when
+/// polling is selected. Implement `DeadlineProcessor` yourself for deadlines.
+/// Construct an instance and run it with `run_all!`,
 /// or return it from a `#[register_processor]` function in a keyboard module.
 ///
 /// # Options
@@ -180,8 +181,9 @@ pub fn event(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///   for each event. Omit this option or use `[]` for a timer-only processor.
 /// - `poll_interval = N`: provide an async `poll()` method. `N` must be a positive
 ///   interval in milliseconds.
-/// - `deadline`: provide `fn deadline(&self) -> Option<embassy_time::Instant>` and
-///   `async fn on_deadline(&mut self)`. Clear or advance the deadline after it fires.
+/// - `deadline`: implement `DeadlineProcessor::deadline()` and `on_deadline()`.
+///   The macro generates the deadline run loop, not this trait implementation.
+///   Clear or advance the deadline after it fires.
 ///
 /// Options can be combined. Callbacks run serially, with ready deadlines before
 /// polling ticks and events. Events do not restart the polling interval.
