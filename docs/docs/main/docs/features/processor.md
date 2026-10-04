@@ -1,6 +1,29 @@
 # Processor
 
-A processor reacts to keyboard events or timers. Use one to update an LED, refresh a display, or handle an inactivity timeout.
+A processor reacts to keyboard events or timers. Use one to update an LED, refresh a display, or handle an inactivity timeout. Define its behavior with `#[processor]`, then add an instance to your keyboard's tasks.
+
+## Before you begin
+
+Start from a working RMK firmware project. The examples below show the modules and task-list changes to add to that project.
+
+- For each new event subscriber, increase `[event.<name>].subs` from its default by one. RMK reserves slots for feature-gated built-in tasks separately. See [event configuration](../configuration/event).
+- The timer examples need `embassy-time`. The GPIO example also needs `embedded-hal`. Add the dependencies your chosen example uses:
+
+```toml title="Cargo.toml"
+[dependencies]
+embassy-time = "0.5"
+embedded-hal = "1"
+```
+
+Choose the trigger that fits your task:
+
+| Task                                               | Processor option                 |
+| -------------------------------------------------- | -------------------------------- |
+| React to a key, layer, or other event              | `subscribe = [EventType, ...]`   |
+| Repeat work at a fixed interval                    | `poll_interval = <milliseconds>` |
+| Handle a timeout that activity can reset or cancel | `deadline`                       |
+
+You can combine the options. A processor with no event subscriptions must have a timer option or a [custom run loop](#custom-runnable).
 
 ## Create an event processor
 
@@ -29,9 +52,13 @@ The macro implements the processor traits and `Runnable`. Defining the type does
 
 ## Run the processor
 
+Choose the setup that matches your project.
+
 ### With keyboard.toml
 
-Declare the module in `src/main.rs`, then add a constructor marked with `#[register_processor]` inside your keyboard module:
+1. Save the processor above as `src/layer_tracker.rs`.
+2. Declare the module in `src/main.rs`.
+3. Add its constructor to your existing `#[rmk_keyboard]` module:
 
 ```rust title="src/main.rs"
 #![no_main]
@@ -56,18 +83,25 @@ The constructor runs after chip initialization and can use the peripherals in `p
 
 ### With the Rust API
 
-After initializing your keyboard and transport, add the processor to the existing `run_all!` call:
+Save the processor above as `src/layer_tracker.rs`, then declare the module and import the type in `src/main.rs`:
 
 ```rust
-use rmk::run_all;
+mod layer_tracker;
 
+use layer_tracker::LayerTracker;
+use rmk::run_all;
+```
+
+After initializing your keyboard and transport, add the instance to your existing task list. In this example, `keyboard` and `transport` are the instances your firmware already runs:
+
+```rust
 let mut layer_tracker = LayerTracker::default();
 run_all!(layer_tracker, keyboard, transport).await;
 ```
 
 Both approaches run the type's `Runnable` implementation. Select event and timer behavior on the type's `#[processor]` attribute.
 
-## Polling processor
+## Run periodic work
 
 Use `poll_interval` for work that repeats at a fixed interval. The value is in milliseconds and must be greater than zero. Provide an async `poll()` method.
 
@@ -96,9 +130,11 @@ impl<P: OutputPin> Blinker<P> {
 }
 ```
 
+Construct the instance with `Blinker::new(output_pin)`, then use the [same registration or task-list steps](#run-the-processor). Initialize `output_pin` with your board's HAL and choose a pin unused by the matrix or other devices.
+
 To also react to events, add `subscribe = [...]` and the corresponding event handlers. Events do not restart the polling interval.
 
-## Deadline processor
+## Handle inactivity
 
 Use `deadline` for a timeout that can be reset or cancelled. Implement `DeadlineProcessor` with these methods:
 
@@ -139,15 +175,21 @@ impl DeadlineProcessor for MotionActivity {
 }
 ```
 
-The same `impl DeadlineProcessor` works in TOML and Rust projects. The macro generates the run loop and calls the trait methods; it does not generate a forwarding implementation.
+Save this module as `src/motion_activity.rs`. Construct it with `MotionActivity::default()` and run it using the [same registration or task-list steps](#run-the-processor).
 
 An event handler can reset the timeout by storing a later deadline, or cancel it by setting the deadline to `None`. The task checks the deadline again after each callback. A deadline-only processor can omit `subscribe`; its initial state must arm the first timeout.
 
 ### Combine polling and deadlines
 
-Set both `poll_interval` and `deadline` on the same `#[processor]` attribute. Keep `poll()` in the inherent implementation and `deadline()` / `on_deadline()` in `impl DeadlineProcessor`. Either polling or an event handler can arm a timeout.
+Add `poll_interval` alongside `deadline` when the processor also needs periodic work:
 
-Callbacks run one at a time. When several sources are ready, RMK handles deadlines first, polling ticks second, and events third. Clear or advance a deadline in `on_deadline()` to avoid calling it repeatedly for the same expired timeout.
+```rust
+#[processor(subscribe = [PointingEvent], poll_interval = 100, deadline)]
+```
+
+Provide `poll()` in the processor's inherent implementation. Keep `deadline()` and `on_deadline()` in `impl DeadlineProcessor`. Either polling or an event handler can arm a timeout.
+
+Callbacks run one at a time and finish before another callback starts. When several sources are ready, RMK handles deadlines first, polling ticks second, and events third. Keep callbacks short when timer responsiveness matters. Clear or advance a deadline in `on_deadline()` to avoid firing repeatedly for the same expired timeout.
 
 ## Handle multiple event types
 
@@ -189,7 +231,7 @@ You can combine these options. Omit `subscribe` or set it to `[]` when no events
 
 ## Custom Runnable
 
-To provide your own run loop, implement `rmk::core_traits::Runnable` and place `#[rmk::macros::runnable_generated]` below `#[processor]`. The marker suppresses the generated run loop; the macro still implements `Processor` and any configured `PollingProcessor`. Deadline behavior remains in your `impl DeadlineProcessor`. A bare `#[processor]` is valid with this marker.
+To provide your own run loop, implement `rmk::core_traits::Runnable` and place `#[rmk::macros::runnable_generated]` below `#[processor]`. The marker keeps your run loop while generating the event-handling and polling traits selected by `#[processor]`. A bare `#[processor]` is valid with this marker. Run the instance using the [same registration or task-list steps](#run-the-processor).
 
 Combining `deadline` with `#[input_device]` requires a custom run loop. Choose how that loop schedules input reads, event handling, and timeouts.
 
