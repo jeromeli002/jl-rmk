@@ -135,7 +135,6 @@ pub fn generate_runnable(
             );
         }
     });
-    let polling_import = has_polling.then(|| quote! { use ::rmk::processor::PollingProcessor; });
     if has_polling {
         select_arms.insert(0, quote! { _ = ticker.next().fuse() => #enum_name::Timer });
         match_arms.push(quote! {
@@ -145,11 +144,8 @@ pub fn generate_runnable(
     wrap_runnable(quote! {
         use ::rmk::event::publish_event_async;
         use ::rmk::input_device::InputDevice;
-        use ::rmk::event::SubscribableEvent;
-        use ::rmk::processor::Processor;
         use ::rmk::event::EventSubscriber;
         use ::rmk::futures::FutureExt;
-        #polling_import
         enum #enum_name {
             Input(#input_type),
             Processor(#proc_type),

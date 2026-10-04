@@ -114,8 +114,6 @@ mod basic {
         async fn run(&mut self) -> ! {
             use ::rmk::event::publish_event_async;
             use ::rmk::input_device::InputDevice;
-            use ::rmk::event::SubscribableEvent;
-            use ::rmk::processor::Processor;
             use ::rmk::event::EventSubscriber;
             use ::rmk::futures::FutureExt;
             enum __RmkSelectEventSensorController {
@@ -271,8 +269,6 @@ mod reversed {
         async fn run(&mut self) -> ! {
             use ::rmk::event::publish_event_async;
             use ::rmk::input_device::InputDevice;
-            use ::rmk::event::SubscribableEvent;
-            use ::rmk::processor::Processor;
             use ::rmk::event::EventSubscriber;
             use ::rmk::futures::FutureExt;
             enum __RmkSelectEventReversedSensorController {
@@ -438,11 +434,8 @@ mod polling {
         async fn run(&mut self) -> ! {
             use ::rmk::event::publish_event_async;
             use ::rmk::input_device::InputDevice;
-            use ::rmk::event::SubscribableEvent;
-            use ::rmk::processor::Processor;
             use ::rmk::event::EventSubscriber;
             use ::rmk::futures::FutureExt;
-            use ::rmk::processor::PollingProcessor;
             enum __RmkSelectEventPollingSensorController {
                 Input(SensorEvent),
                 Processor(ConfigEvent),
@@ -796,8 +789,6 @@ mod multi_event {
         async fn run(&mut self) -> ! {
             use ::rmk::event::publish_event_async;
             use ::rmk::input_device::InputDevice;
-            use ::rmk::event::SubscribableEvent;
-            use ::rmk::processor::Processor;
             use ::rmk::event::EventSubscriber;
             use ::rmk::futures::FutureExt;
             enum __RmkSelectEventMultiEventSensorController {
@@ -1129,11 +1120,8 @@ mod multi_event_polling {
         async fn run(&mut self) -> ! {
             use ::rmk::event::publish_event_async;
             use ::rmk::input_device::InputDevice;
-            use ::rmk::event::SubscribableEvent;
-            use ::rmk::processor::Processor;
             use ::rmk::event::EventSubscriber;
             use ::rmk::futures::FutureExt;
-            use ::rmk::processor::PollingProcessor;
             enum __RmkSelectEventMultiEventPollingSensorController {
                 Input(SensorEvent),
                 Processor(MultiEventPollingSensorControllerProcessorEventEnum),
@@ -1335,11 +1323,8 @@ mod polling_without_subscription {
         async fn run(&mut self) -> ! {
             use ::rmk::event::publish_event_async;
             use ::rmk::input_device::InputDevice;
-            use ::rmk::event::SubscribableEvent;
-            use ::rmk::processor::Processor;
             use ::rmk::event::EventSubscriber;
             use ::rmk::futures::FutureExt;
-            use ::rmk::processor::PollingProcessor;
             enum __RmkSelectEventPollingSensor {
                 Input(SensorEvent),
                 Processor(::core::convert::Infallible),
@@ -1530,11 +1515,8 @@ mod polling_without_subscription {
         async fn run(&mut self) -> ! {
             use ::rmk::event::publish_event_async;
             use ::rmk::input_device::InputDevice;
-            use ::rmk::event::SubscribableEvent;
-            use ::rmk::processor::Processor;
             use ::rmk::event::EventSubscriber;
             use ::rmk::futures::FutureExt;
-            use ::rmk::processor::PollingProcessor;
             enum __RmkSelectEventReversedPollingSensor {
                 Input(SensorEvent),
                 Processor(::core::convert::Infallible),
