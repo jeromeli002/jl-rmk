@@ -6,9 +6,6 @@
 
 pub mod builtin;
 
-#[cfg(test)]
-mod tests;
-
 use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_time::{Instant, Timer};
 
@@ -124,5 +121,64 @@ async fn wait_for_deadline(deadline: Option<Instant>) {
         Some(at) if at <= Instant::now() => {}
         Some(at) => Timer::at(at).await,
         None => core::future::pending().await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::cell::Cell;
+    use core::pin::pin;
+
+    use embassy_time::{Duration, Instant, MockDriver};
+    use futures::poll;
+    use rmk_macro::processor;
+
+    use super::DeadlineProcessor;
+    use crate::core_traits::Runnable;
+    use crate::test_support::test_block_on;
+
+    #[processor(poll_interval = 100, deadline)]
+    struct Timed<'a> {
+        due: Option<Instant>,
+        deadlines: &'a Cell<u8>,
+        polls: &'a Cell<u8>,
+    }
+
+    impl DeadlineProcessor for Timed<'_> {
+        fn deadline(&self) -> Option<Instant> {
+            self.due
+        }
+
+        async fn on_deadline(&mut self) {
+            self.deadlines.set(self.deadlines.get() + 1);
+            self.due = None;
+        }
+    }
+
+    impl Timed<'_> {
+        async fn poll(&mut self) {
+            self.polls.set(self.polls.get() + 1);
+            self.due = Some(Instant::now() + Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn polling_rearms_deadlines_and_due_deadlines_precede_ticks() {
+        test_block_on(async {
+            let deadlines = Cell::new(0);
+            let polls = Cell::new(0);
+            let mut processor = Timed {
+                due: Some(Instant::from_millis(100)),
+                deadlines: &deadlines,
+                polls: &polls,
+            };
+            let mut run = pin!(processor.run());
+            assert!(poll!(run.as_mut()).is_pending());
+            for (at, expected) in [(50, (0, 0)), (100, (1, 1)), (120, (2, 1)), (200, (2, 2)), (220, (3, 2))] {
+                MockDriver::get().advance(Duration::from_millis(at - Instant::now().as_millis()));
+                assert!(poll!(run.as_mut()).is_pending());
+                assert_eq!((deadlines.get(), polls.get()), expected, "at {at} ms");
+            }
+        });
     }
 }
