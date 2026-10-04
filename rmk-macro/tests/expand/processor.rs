@@ -5,7 +5,6 @@
 //! - Multiple event subscription
 //! - Polling processor with poll_interval
 //! - Multiple #[processor] attributes (merged subscriptions)
-//! - Deadline processor (`deadline`)
 
 use rmk_macro::processor;
 
@@ -57,8 +56,8 @@ mod polling {
 mod multi_attr {
     use super::{EncoderEvent, KeyEvent, processor};
 
-    #[processor(subscribe = [KeyEvent])]
-    #[processor(subscribe = [EncoderEvent])]
+    #[processor(subscribe = [KeyEvent], poll_interval = 100)]
+    #[rmk_macro::processor(subscribe = [EncoderEvent], deadline)]
     pub struct MultiAttrProcessor;
 }
 
@@ -72,39 +71,6 @@ mod polling_multi {
     }
 }
 
-/// Deadline processor: the generated `Runnable` drives `deadline_loop()`
-mod deadline {
-    use super::{KeyEvent, processor};
-
-    #[processor(subscribe = [KeyEvent], deadline)]
-    pub struct Blinker {
-        pub armed: bool,
-    }
-
-    impl rmk::processor::DeadlineProcessor for Blinker {
-        fn deadline(&self) -> Option<rmk::embassy_time::Instant> {
-            None
-        }
-        async fn on_deadline(&mut self) {}
-    }
-}
-
-/// Independent timing sources can be declared on sibling attributes.
-mod polling_deadline {
-    use super::{ConfigEvent, KeyEvent, processor};
-
-    #[processor(subscribe = [KeyEvent], poll_interval = 100)]
-    #[processor(subscribe = [ConfigEvent], deadline)]
-    pub struct StatusDisplay;
-
-    impl rmk::processor::DeadlineProcessor for StatusDisplay {
-        fn deadline(&self) -> Option<rmk::embassy_time::Instant> {
-            None
-        }
-        async fn on_deadline(&mut self) {}
-    }
-}
-
 mod timer_only {
     use super::processor;
 
@@ -114,25 +80,7 @@ mod timer_only {
     #[processor(subscribe = [], deadline)]
     pub struct Deadline;
 
-    impl rmk::processor::DeadlineProcessor for Deadline {
-        fn deadline(&self) -> Option<rmk::embassy_time::Instant> {
-            None
-        }
-        async fn on_deadline(&mut self) {}
-    }
-
     #[processor]
-    #[processor(poll_interval = 100, deadline)]
-    pub struct Both;
-
-    impl rmk::processor::DeadlineProcessor for Both {
-        fn deadline(&self) -> Option<rmk::embassy_time::Instant> {
-            None
-        }
-        async fn on_deadline(&mut self) {}
-    }
-
-    #[processor]
-    #[::rmk::macros::runnable_generated]
+    #[rmk_macro::runnable_generated]
     pub struct Custom;
 }

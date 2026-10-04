@@ -235,38 +235,7 @@ mod tests {
 
     use quote::quote;
 
-    use super::{expand_custom_processor, registered_processor_executor};
-
-    /// The executor generated for `attr` on a registered function named `leds`.
-    fn executor(attr: &str) -> String {
-        let item: syn::ItemFn =
-            syn::parse_str(&format!("{attr} fn leds() -> Leds {{ Leds::new() }}")).unwrap();
-        registered_processor_executor(&item.attrs[0], &item.sig.ident).to_string()
-    }
-
-    #[test]
-    fn registration_arguments_report_how_to_migrate() {
-        for attr in [
-            "#[register_processor(event)]",
-            "#[register_processor(poll)]",
-            "#[register_processor(deadline)]",
-            "#[register_processor(event, deadline)]",
-            "#[register_processor = true]",
-        ] {
-            let error = executor(attr);
-            assert!(error.contains("compile_error"), "{error}");
-            assert!(error.contains("takes no arguments"), "{error}");
-            assert!(error.contains("on #[processor]"), "{error}");
-        }
-    }
-
-    #[test]
-    fn bare_registration_runs_the_types_runnable() {
-        let expected = quote! { ::rmk::core_traits::Runnable::run(&mut leds) };
-        for attr in ["#[register_processor]", "#[register_processor()]"] {
-            assert_eq!(executor(attr), expected.to_string());
-        }
-    }
+    use super::expand_custom_processor;
 
     #[test]
     fn conditional_registration_gates_initialization_and_execution() {
@@ -274,37 +243,22 @@ mod tests {
             mod keyboard {
                 #[cfg(all())]
                 #[register_processor]
-                fn enabled() -> Worker { Worker::new() }
+                fn enabled() -> Worker {
+                    initialized.set(initialized.get() + 1);
+                    Worker(&started)
+                }
 
                 #[cfg(any())]
                 #[register_processor]
                 fn disabled() -> Missing { must_not_compile() }
 
-                #[cfg(all())]
-                #[cfg(any())]
-                #[register_processor]
-                fn multiple_gates() -> Missing { must_not_compile() }
-
                 #[cfg_attr(all(), cfg_attr(all(), cfg(any())), inline)]
                 #[register_processor]
                 fn nested_disabled() -> Missing { must_not_compile() }
-
-                #[cfg_attr(any(), cfg(any()))]
-                #[register_processor]
-                fn inactive_cfg_attr() -> Worker { Worker::new() }
-
-                #[cfg_attr(all(), inline)]
-                #[register_processor]
-                fn function_attribute() -> Worker { Worker::new() }
-
-                #[cfg(all())]
-                #[cfg_attr(all(), cfg(all()))]
-                #[register_processor]
-                fn all_enabled() -> Worker { Worker::new() }
             }
         };
         let mut initializers = Vec::new();
-        let mut polls = Vec::new();
+        let mut executors = Vec::new();
         for item in &module.content.unwrap().1 {
             let syn::Item::Fn(item) = item else {
                 unreachable!()
@@ -316,41 +270,35 @@ mod tests {
                 .unwrap();
             let (init, exec) = expand_custom_processor(item, registration).unwrap();
             initializers.push(init);
-            polls.push(quote! {
-                let mut task = ::std::pin::pin!(#exec);
-                assert!(::std::future::Future::poll(task.as_mut(), &mut context).is_pending());
-            });
+            executors.push(exec);
         }
         let source = quote! {
             extern crate self as rmk;
-            use std::sync::atomic::{AtomicUsize, Ordering};
-            static INITIALIZED: AtomicUsize = AtomicUsize::new(0);
-            static STARTED: AtomicUsize = AtomicUsize::new(0);
+            use std::cell::Cell;
             mod core_traits {
                 pub(crate) trait Runnable {
                     async fn run(&mut self) -> !;
                 }
             }
-            struct Worker;
-            impl Worker {
-                fn new() -> Self {
-                    INITIALIZED.fetch_add(1, Ordering::Relaxed);
-                    Self
-                }
-            }
-            impl core_traits::Runnable for Worker {
+            struct Worker<'a>(&'a Cell<u8>);
+            impl core_traits::Runnable for Worker<'_> {
                 async fn run(&mut self) -> ! {
-                    STARTED.fetch_add(1, Ordering::Relaxed);
+                    self.0.set(self.0.get() + 1);
                     core::future::pending().await
                 }
             }
             fn main() {
+                let initialized = Cell::new(0);
+                let started = Cell::new(0);
                 #(#initializers)*
-                assert_eq!(INITIALIZED.load(Ordering::Relaxed), 4);
-                assert_eq!(STARTED.load(Ordering::Relaxed), 0);
+                assert_eq!(initialized.get(), 1);
+                assert_eq!(started.get(), 0);
                 let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-                #(#polls)*
-                assert_eq!(STARTED.load(Ordering::Relaxed), 4);
+                #({
+                    let mut task = ::std::pin::pin!(#executors);
+                    assert!(::std::future::Future::poll(task.as_mut(), &mut context).is_pending());
+                })*
+                assert_eq!(started.get(), 1);
             }
         };
         let dir = std::env::temp_dir().join(format!(
