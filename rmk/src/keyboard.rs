@@ -1417,6 +1417,7 @@ impl<'a> Keyboard<'a> {
 
             // In passkey mode: capture on release only (prevents Enter release leaking)
             if !event.pressed {
+                self.unregister_key(key, mods, event);
                 match self.passkey_entry_state.handle_key(key) {
                     PasskeyAction::Submitted(passkey) => {
                         info!("[passkey] Submitting passkey");
