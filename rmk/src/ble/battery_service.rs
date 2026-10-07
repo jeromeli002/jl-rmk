@@ -53,7 +53,7 @@ pub(crate) struct BatteryService {
         value = crate::CENTRAL_BATTERY_USER_DESCRIPTION
     )]
     #[descriptor(uuid = descriptors::VALID_RANGE, read, value = [0, 100])]
-    #[characteristic(uuid = characteristic::BATTERY_LEVEL, read, notify)]
+    #[characteristic(uuid = characteristic::BATTERY_LEVEL, read, notify, permissions(encrypted))]
     pub(crate) level: u8,
 }
 
@@ -94,11 +94,13 @@ fn add_peripheral_battery_level<M: embassy_sync::blocking_mutex::raw::RawMutex, 
         ..Default::default()
     };
     let mut service = table.add_service(Service::new(service::BATTERY));
-    let mut level = service.add_characteristic_small(
-        characteristic::BATTERY_LEVEL,
-        [CharacteristicProp::Read, CharacteristicProp::Notify],
-        0u8,
-    );
+    let mut level = service
+        .add_characteristic_small(
+            characteristic::BATTERY_LEVEL,
+            [CharacteristicProp::Read, CharacteristicProp::Notify],
+            0u8,
+        )
+        .read_permission(PermissionLevel::EncryptionRequired);
     level.add_descriptor_small(
         descriptors::CHARACTERISTIC_PRESENTATION_FORMAT,
         permissions,
@@ -259,30 +261,12 @@ fn find_peripheral_battery_slot(configured_ids: &[usize], peripheral_id: usize) 
 }
 
 #[cfg(feature = "split")]
-fn initialize_peripheral_battery_levels(server: &Server) {
-    for (slot, peripheral_id) in crate::SPLIT_BATTERY_PERIPHERAL_IDS.iter().copied().enumerate() {
-        if let Some(BatteryStatus::Available { level: Some(level), .. }) =
-            crate::split::driver::current_peripheral_battery_status(peripheral_id)
-            && let Err(e) = server.set(&server.peripheral_battery_services.levels[slot], &level)
-        {
-            error!(
-                "Failed to initialize peripheral {} battery level: {:?}",
-                peripheral_id, e
-            );
-        }
-    }
-}
-
-#[cfg(feature = "split")]
 impl<'stack, 'server, 'conn, P: PacketPool> BlePeripheralBatteryServer<'stack, 'server, 'conn, P> {
     pub(crate) fn new(server: &Server, conn: &'conn GattConnection<'stack, 'server, P>) -> Self {
-        let sub = PeripheralBatteryEvent::subscriber();
-        initialize_peripheral_battery_levels(server);
-
         Self {
             battery_levels: server.peripheral_battery_services.levels,
             conn,
-            sub,
+            sub: PeripheralBatteryEvent::subscriber(),
         }
     }
 }
