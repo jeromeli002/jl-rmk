@@ -30,7 +30,7 @@ pub struct NrfAdc<'a, const PIN_NUM: usize, const EVENT_NUM: usize> {
 }
 
 impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT_NUM> {
-    /// Battery channels require the default SAADC configuration (12-bit, 0.6 V, gain 1/6).
+    /// Battery channels require Embassy's default SAADC configuration.
     pub fn new(
         saadc: Saadc<'a, PIN_NUM>,
         event_type: [AnalogEventType; EVENT_NUM],
@@ -131,7 +131,7 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
                     return NrfAdcEvent::Pointing(PointingEvent { device_id, axes: e });
                 }
                 AnalogEventType::Battery => {
-                    // Convert the default SAADC range to input millivolts.
+                    // Convert to millivolts using Embassy's default SAADC settings.
                     let battery_adc_value =
                         (u32::from(buf[self.channel_state as usize].max(0) as u16) * 3600 / 4096) as u16;
                     self.channel_state += 1;
