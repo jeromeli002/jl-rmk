@@ -29,10 +29,7 @@ pub struct ChargingStateReader<I: InputPin> {
     state_input: I,
     // True: low represents charging, False: high represents charging
     low_active: bool,
-    // True: charging, False: not charging
-    current_charging_state: bool,
-    // First read done
-    first_read: bool,
+    current_charging_state: Option<bool>,
 }
 
 impl<I: InputPin> ChargingStateReader<I> {
@@ -40,44 +37,25 @@ impl<I: InputPin> ChargingStateReader<I> {
         Self {
             state_input,
             low_active,
-            current_charging_state: false,
-            first_read: false,
+            current_charging_state: None,
         }
     }
 
     /// Read the charging state and return an event.
     /// This method waits until there's a state change to report.
     async fn read_charging_state_event(&mut self) -> ChargingStateEvent {
-        // For the first read, don't check whether the charging state is changed
-        if !self.first_read {
-            // Wait 2s before reading the first value
-            embassy_time::Timer::after_secs(2).await;
-            let charging_state = if self.low_active {
-                self.state_input.is_low().unwrap_or(false)
-            } else {
-                self.state_input.is_high().unwrap_or(false)
-            };
-            self.current_charging_state = charging_state;
-            self.first_read = true;
-            return ChargingStateEvent {
-                charging: charging_state,
-            };
-        }
-
         loop {
-            // Check charging state every 5 seconds
-            embassy_time::Timer::after_secs(5).await;
+            let delay = if self.current_charging_state.is_none() { 2 } else { 5 };
+            embassy_time::Timer::after_secs(delay).await;
 
-            // Detect charging state
             let charging_state = if self.low_active {
                 self.state_input.is_low().unwrap_or(false)
             } else {
                 self.state_input.is_high().unwrap_or(false)
             };
 
-            // Only return event when charging state changes
-            if charging_state != self.current_charging_state {
-                self.current_charging_state = charging_state;
+            if self.current_charging_state != Some(charging_state) {
+                self.current_charging_state = Some(charging_state);
                 return ChargingStateEvent {
                     charging: charging_state,
                 };
