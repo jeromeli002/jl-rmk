@@ -25,11 +25,7 @@ rows = 2
 cols = 2
 "#;
 
-fn write_temp_keyboard_toml(name: &str, extra_toml: &str) -> std::path::PathBuf {
-    write_temp_toml(name, &format!("{MINIMAL_KEYBOARD_TOML}\n{extra_toml}"))
-}
-
-fn write_temp_toml(name: &str, content: &str) -> std::path::PathBuf {
+fn write_temp_keyboard_toml(name: &str, content: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!(
         "rmk-{name}-{}-{}.toml",
         std::process::id(),
@@ -100,10 +96,13 @@ fn all_use_config_examples_resolve() {
 fn host_unlock_keys_reject_too_many_entries() {
     let path = write_temp_keyboard_toml(
         "host-unlock-too-many",
-        r#"
+        &format!(
+            "{MINIMAL_KEYBOARD_TOML}\n{}",
+            r#"
 [host]
 unlock_keys = [[0, 0], [0, 1], [1, 0], [1, 1], [0, 0]]
-"#,
+"#
+        ),
     );
     let config = KeyboardTomlConfig::new_from_toml_path(&path);
 
@@ -126,10 +125,13 @@ unlock_keys = [[0, 0], [0, 1], [1, 0], [1, 1], [0, 0]]
 fn dfu_unlock_keys_reject_too_many_entries() {
     let path = write_temp_keyboard_toml(
         "dfu-unlock-too-many",
-        r#"
+        &format!(
+            "{MINIMAL_KEYBOARD_TOML}\n{}",
+            r#"
 [dfu]
 unlock_keys = [[0, 0], [0, 1], [1, 0], [1, 1], [0, 0]]
-"#,
+"#
+        ),
     );
     let config = KeyboardTomlConfig::new_from_toml_path(&path);
     let result = config.hardware();
@@ -148,10 +150,13 @@ unlock_keys = [[0, 0], [0, 1], [1, 0], [1, 1], [0, 0]]
 fn dfu_unlock_keys_reject_positions_outside_layout() {
     let path = write_temp_keyboard_toml(
         "dfu-unlock-outside-layout",
-        r#"
+        &format!(
+            "{MINIMAL_KEYBOARD_TOML}\n{}",
+            r#"
 [dfu]
 unlock_keys = [[0, 0], [2, 0]]
-"#,
+"#
+        ),
     );
     let config = KeyboardTomlConfig::new_from_toml_path(&path);
     let result = config.hardware();
@@ -168,7 +173,7 @@ unlock_keys = [[0, 0], [2, 0]]
 
 #[test]
 fn battery_adc_rejects_zero_divider_total() {
-    let path = write_temp_toml(
+    let path = write_temp_keyboard_toml(
         "battery-zero-divider-total",
         &format!(
             r#"{}
@@ -233,7 +238,9 @@ fn unknown_keys_are_rejected() {
 fn alias_keys_reject_delimiter_characters() {
     let path = write_temp_keyboard_toml(
         "alias-bad-key",
-        r#"
+        &format!(
+            "{MINIMAL_KEYBOARD_TOML}\n{}",
+            r#"
 [aliases]
 "bad(name" = "A"
 
@@ -241,7 +248,8 @@ fn alias_keys_reject_delimiter_characters() {
 
 [[keymap.layer]]
 keys = "A A A A"
-"#,
+"#
+        ),
     );
     let config = KeyboardTomlConfig::new_from_toml_path(&path);
     let result = config.keymap();
@@ -274,7 +282,7 @@ fn dfu_storage_conflict_reports_explicit_storage_keys() {
         ),
     ];
     for (name, extra, expect_start, expect_sectors) in cases {
-        let path = write_temp_keyboard_toml(name, extra);
+        let path = write_temp_keyboard_toml(name, &format!("{MINIMAL_KEYBOARD_TOML}\n{}", extra));
         let config = KeyboardTomlConfig::new_from_toml_path(&path);
         std::fs::remove_file(path).ok();
 
@@ -297,7 +305,7 @@ fn dfu_storage_conflict_absent_without_user_storage() {
         ("storage-only", "[storage]\nstart_addr = 0x100000\nnum_sectors = 8\n"),
     ];
     for (name, extra) in cases {
-        let path = write_temp_keyboard_toml(name, extra);
+        let path = write_temp_keyboard_toml(name, &format!("{MINIMAL_KEYBOARD_TOML}\n{}", extra));
         let config = KeyboardTomlConfig::new_from_toml_path(&path);
         std::fs::remove_file(path).ok();
 
@@ -309,7 +317,9 @@ fn dfu_storage_conflict_absent_without_user_storage() {
 fn split_side_dfu_replaces_global_per_side() {
     let path = write_temp_keyboard_toml(
         "split-side-dfu",
-        r#"
+        &format!(
+            "{MINIMAL_KEYBOARD_TOML}\n{}",
+            r#"
 [split]
 connection = "serial"
 
@@ -342,7 +352,8 @@ spi = { instance = "SPI0", sck = "PIN_5", mosi = "PIN_6", miso = "PIN_7", cs = "
 
 [split.peripheral.dfu]
 led = "PIN_9"
-"#,
+"#
+        ),
     );
     let config = KeyboardTomlConfig::new_from_toml_path(&path);
     std::fs::remove_file(path).ok();
@@ -368,7 +379,9 @@ led = "PIN_9"
 fn split_side_dfu_falls_back_to_global() {
     let path = write_temp_keyboard_toml(
         "split-side-dfu-fallback",
-        r#"
+        &format!(
+            "{MINIMAL_KEYBOARD_TOML}\n{}",
+            r#"
 [split]
 connection = "serial"
 
@@ -394,7 +407,8 @@ col_pins = ["PIN_3"]
 
 [dfu]
 led = "PIN_4"
-"#,
+"#
+        ),
     );
     let config = KeyboardTomlConfig::new_from_toml_path(&path);
     std::fs::remove_file(path).ok();
@@ -410,7 +424,9 @@ led = "PIN_4"
 fn split_central_dfu_replaces_global_for_central_only() {
     let path = write_temp_keyboard_toml(
         "split-central-dfu",
-        r#"
+        &format!(
+            "{MINIMAL_KEYBOARD_TOML}\n{}",
+            r#"
 [split]
 connection = "serial"
 
@@ -443,7 +459,8 @@ spi = { instance = "SPI0", sck = "PIN_5", mosi = "PIN_6", miso = "PIN_7", cs = "
 
 [split.central.dfu]
 led = "PIN_9"
-"#,
+"#
+        ),
     );
     let config = KeyboardTomlConfig::new_from_toml_path(&path);
     std::fs::remove_file(path).ok();
@@ -467,7 +484,7 @@ led = "PIN_9"
 
 #[test]
 fn split_boards_take_their_own_charger_pins() {
-    let path = write_temp_toml(
+    let path = write_temp_keyboard_toml(
         "split-charge-state",
         r#"
 [keyboard]
@@ -518,7 +535,7 @@ charge_led = { pin = "P0_14", low_active = true }
 
 #[test]
 fn charge_led_requires_a_local_battery_source() {
-    let path = write_temp_toml(
+    let path = write_temp_keyboard_toml(
         "led-without-source",
         &format!(
             r#"{}
