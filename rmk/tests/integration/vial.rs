@@ -552,3 +552,27 @@ fn tt_write_survives_restart() {
             .await;
     });
 }
+
+#[test]
+fn high_layer_momentary_write_activates_the_requested_layer() {
+    test_block_on(async {
+        let mut keymap = [[[rmk::a!(Transparent), k!(B)]]; 32];
+        keymap[16][0][1] = k!(C);
+        let mut keyboard = SimKeyboard::builder(keymap).build().await;
+        let mut request = via(ViaCommand::DynamicKeymapSetKeyCode);
+        request[4..6].copy_from_slice(&0x5230u16.to_be_bytes()); // MO(16)
+        keyboard.echo(request);
+        keyboard
+            .press(0, 0)
+            .tap(0, 1, 10)
+            .expect_keys([HidKeyCode::C])
+            .expect_keys([])
+            .release(0, 0)
+            .tap(0, 1, 10)
+            .expect_keys([HidKeyCode::B])
+            .expect_keys([]);
+        request[0] = ViaCommand::DynamicKeymapGetKeyCode as u8;
+        keyboard.echo(request);
+        keyboard.run().await;
+    });
+}

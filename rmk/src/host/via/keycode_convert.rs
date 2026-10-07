@@ -49,7 +49,7 @@ pub(crate) fn to_via_keycode(key_action: KeyAction) -> u16 {
             Action::TriggerMacro(idx) => 0x7700 + (idx as u16),
             Action::OneShotLayer(l) => {
                 // One-shot layer
-                if l < 16 { 0x5280 | l as u16 } else { 0x0000 }
+                if l < 32 { 0x5280 | l as u16 } else { 0x0000 }
             }
             Action::OneShotModifier(m) => {
                 // One-shot modifier
@@ -167,27 +167,27 @@ pub(crate) fn from_via_keycode(via_keycode: u16) -> KeyAction {
         }
         0x5200..=0x521F => {
             // Activate layer X and deactivate other layers(except default layer)
-            let layer = via_keycode as u8 & 0x0F;
+            let layer = via_keycode as u8 & 0x1F;
             KeyAction::Single(Action::LayerToggleOnly(layer))
         }
         0x5220..=0x523F => {
             // Layer activate
-            let layer = via_keycode as u8 & 0x0F;
+            let layer = via_keycode as u8 & 0x1F;
             KeyAction::Single(Action::LayerOn(layer))
         }
         0x5240..=0x525F => {
             // Set default layer
-            let layer = via_keycode as u8 & 0x0F;
+            let layer = via_keycode as u8 & 0x1F;
             KeyAction::Single(Action::DefaultLayer(layer))
         }
         0x5260..=0x527F => {
             // Layer toggle
-            let layer = via_keycode as u8 & 0x0F;
+            let layer = via_keycode as u8 & 0x1F;
             KeyAction::Single(Action::LayerToggle(layer))
         }
         0x5280..=0x529F => {
             // One-shot layer
-            let layer = via_keycode as u8 & 0xF;
+            let layer = via_keycode as u8 & 0x1F;
             KeyAction::Single(Action::OneShotLayer(layer))
         }
         0x52A0..=0x52BF => {
@@ -202,7 +202,7 @@ pub(crate) fn from_via_keycode(via_keycode: u16) -> KeyAction {
         }
         0x52E0..=0x52FF => {
             // Persistent default layer (PDF)
-            let layer = via_keycode as u8 & 0x0F;
+            let layer = via_keycode as u8 & 0x1F;
             KeyAction::Single(Action::PersistentDefaultLayer(layer))
         }
         0x5700..=0x57FF => {
@@ -600,6 +600,25 @@ mod test {
         // Morse(255)
         let via_keycode = 0x57FF;
         assert_eq!(KeyAction::Morse(255), from_via_keycode(via_keycode));
+    }
+
+    #[test]
+    fn test_convert_five_bit_layer_actions() {
+        for layer in 0..32u8 {
+            for (base, action) in [
+                (0x5200, Action::LayerToggleOnly(layer)),
+                (0x5220, Action::LayerOn(layer)),
+                (0x5240, Action::DefaultLayer(layer)),
+                (0x5260, Action::LayerToggle(layer)),
+                (0x5280, Action::OneShotLayer(layer)),
+                (0x52E0, Action::PersistentDefaultLayer(layer)),
+            ] {
+                let keycode = base | u16::from(layer);
+                assert_eq!(from_via_keycode(keycode), KeyAction::Single(action), "{keycode:#06x}");
+                assert_eq!(to_via_keycode(KeyAction::Single(action)), keycode);
+            }
+        }
+        assert_eq!(to_via_keycode(KeyAction::Single(Action::OneShotLayer(32))), 0);
     }
 
     #[test]
