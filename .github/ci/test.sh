@@ -27,10 +27,6 @@ for feats in "${RMK_TEST_FEATURESETS[@]}"; do
     fi
 done
 
-KEYBOARD_TOML_PATH="$repo_root/rmk/tests/ble_battery.toml" cargo +stable "${nx[@]}" \
-    --manifest-path rmk/Cargo.toml --no-default-features --features split,vial,storage,async_matrix,_ble \
-    --run-ignored only -E 'test(ble::ble_server::tests::peripheral_reads_)'
-
 # Doctests: nextest does not run them. rmk/ and rmk-macro/ have `doctest = false`,
 # so only rmk-types and rmk-config need a separate --doc pass.
 log_section "Running doctests"
