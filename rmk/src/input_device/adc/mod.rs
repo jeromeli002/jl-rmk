@@ -5,7 +5,7 @@ pub mod rp2040;
 
 // embassy-nrf compiles `saadc` out for parts that lack it (nRF52820, nRF5340-net,
 // nRF51), so this module can't build on `_no_saadc` chips.
-#[cfg(all(feature = "_nrf_ble", not(feature = "_no_saadc")))]
+#[cfg(any(test, all(feature = "_nrf_ble", not(feature = "_no_saadc"))))]
 pub mod nrf;
 
 #[cfg(all(feature = "_nrf_ble", not(feature = "_no_saadc")))]

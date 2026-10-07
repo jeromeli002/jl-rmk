@@ -1,6 +1,9 @@
+#[cfg(not(test))]
 use embassy_nrf::saadc::Saadc;
 use embassy_time::{Duration, Instant};
 use rmk_macro::{Event, input_device};
+#[cfg(test)]
+use tests::Saadc;
 
 use super::{AdcState, AnalogEventType};
 use crate::event::{Axis, AxisEvent, AxisValType, BatteryAdcEvent, PointingEvent};
@@ -27,6 +30,9 @@ pub struct NrfAdc<'a, const PIN_NUM: usize, const EVENT_NUM: usize> {
     buf_state: bool,
     adc_state: AdcState,
     active_instant: Instant,
+    sampled: bool,
+    next_battery: Instant,
+    battery_interval: Duration,
 }
 
 impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT_NUM> {
@@ -38,6 +44,14 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
         polling_interval: Duration,
         light_sleep: Option<Duration>,
     ) -> Self {
+        let battery_interval = if event_type
+            .iter()
+            .any(|event| matches!(event, AnalogEventType::Joystick(_)))
+        {
+            Duration::from_secs(30)
+        } else {
+            polling_interval
+        };
         Self {
             saadc,
             polling_interval,
@@ -45,11 +59,14 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
             event_device_ids,
             light_sleep,
             buf: [[0; PIN_NUM]; 2],
-            event_state: 0,
+            event_state: EVENT_NUM as u8,
             channel_state: 0,
             buf_state: false,
             adc_state: AdcState::LightSleep,
             active_instant: Instant::MIN,
+            sampled: false,
+            next_battery: Instant::MIN,
+            battery_interval,
         }
     }
 }
@@ -57,23 +74,19 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
 impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT_NUM> {
     async fn read_nrf_adc_event(&mut self) -> NrfAdcEvent {
         loop {
-            if self.active_instant == Instant::MIN {
-                self.saadc.sample(&mut self.buf[1]).await;
-                self.active_instant = Instant::now();
-            } else if let Some(light_sleep) = self.light_sleep
-                && self.adc_state == AdcState::LightSleep
-            {
-                embassy_time::Timer::after(light_sleep).await;
-            } else {
-                embassy_time::Timer::after(self.polling_interval).await;
-            }
-
-            if self.active_instant.elapsed().as_millis() > 1200 {
-                self.adc_state = AdcState::LightSleep;
-            }
-
             if self.event_state == EVENT_NUM as u8 {
-                if self.channel_state != PIN_NUM as u8 {
+                if self.sampled {
+                    let interval = if self.adc_state == AdcState::LightSleep {
+                        self.light_sleep.unwrap_or(self.polling_interval)
+                    } else {
+                        self.polling_interval
+                    };
+                    embassy_time::Timer::after(interval).await;
+                }
+                if self.active_instant.elapsed().as_millis() > 1200 {
+                    self.adc_state = AdcState::LightSleep;
+                }
+                if self.sampled && self.channel_state != PIN_NUM as u8 {
                     error!("NrfAdc's pin size and event's required is mismatch");
                 }
                 self.buf_state = !self.buf_state;
@@ -83,14 +96,26 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
                     &mut self.buf[1]
                 };
                 self.saadc.sample(buf).await;
-                for (a, b) in self.buf[0].iter().zip(self.buf[1].iter()) {
-                    if i16::abs(a - b) > 150 {
-                        debug!("ADC Active");
-                        self.adc_state = AdcState::Active;
-                        self.active_instant = Instant::now();
-                        break;
+                let mut channel = 0;
+                for event in &self.event_type {
+                    match event {
+                        AnalogEventType::Battery => channel += 1,
+                        AnalogEventType::Joystick(axes) => {
+                            let end = channel + usize::from(*axes);
+                            if self.sampled
+                                && self.buf[0][channel..end]
+                                    .iter()
+                                    .zip(&self.buf[1][channel..end])
+                                    .any(|(a, b)| (i32::from(*a) - i32::from(*b)).abs() > 150)
+                            {
+                                self.adc_state = AdcState::Active;
+                                self.active_instant = Instant::now();
+                            }
+                            channel = end;
+                        }
                     }
                 }
+                self.sampled = true;
                 self.channel_state = 0;
                 self.event_state = 0;
             }
@@ -136,9 +161,58 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
                         (u32::from(buf[self.channel_state as usize].max(0) as u16) * 3600 / 4096) as u16;
                     self.channel_state += 1;
                     self.event_state += 1;
+                    if Instant::now() < self.next_battery {
+                        continue;
+                    }
+                    self.next_battery = Instant::now() + self.battery_interval;
                     return NrfAdcEvent::Battery(BatteryAdcEvent(battery_adc_value));
                 }
             };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+
+    use super::*;
+
+    // Substitute only the hardware sample operation; exercise the production scan loop.
+    pub struct Saadc<'a, const N: usize> {
+        pub samples: &'a mut VecDeque<[i16; N]>,
+    }
+
+    impl<const N: usize> Saadc<'_, N> {
+        pub async fn sample(&mut self, output: &mut [i16; N]) {
+            *output = self.samples.pop_front().expect("unexpected extra ADC scan");
+        }
+    }
+
+    #[test]
+    fn scan_outputs_share_a_timestamp_and_battery_changes_do_not_wake_joystick() {
+        crate::test_support::test_block_on(async {
+            let mut samples = VecDeque::from([[1000, 1000], [3000, 1000], [3000, 1300]]);
+            let mut adc = NrfAdc::new(
+                Saadc { samples: &mut samples },
+                [AnalogEventType::Battery, AnalogEventType::Joystick(1)],
+                [0, 7],
+                Duration::from_millis(20),
+                Some(Duration::from_millis(350)),
+            );
+            let first = Instant::now();
+            assert!(matches!(adc.read_nrf_adc_event().await, NrfAdcEvent::Battery(_)));
+            let NrfAdcEvent::Pointing(event) = adc.read_nrf_adc_event().await else {
+                panic!("joystick event")
+            };
+            assert_eq!(event.device_id, 7);
+            assert_eq!(Instant::now(), first);
+
+            assert!(matches!(adc.read_nrf_adc_event().await, NrfAdcEvent::Pointing(_)));
+            assert_eq!(Instant::now() - first, Duration::from_millis(350));
+            assert!(adc.adc_state == AdcState::LightSleep);
+            assert!(matches!(adc.read_nrf_adc_event().await, NrfAdcEvent::Pointing(_)));
+            assert!(adc.adc_state == AdcState::Active);
+        });
     }
 }
