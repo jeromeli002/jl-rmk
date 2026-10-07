@@ -512,7 +512,8 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                     GattEvent::Read(event) => {
                         debug!("Read GATT Event: {:?}", event.handle());
                         if conn.raw().security_level()?.encrypted() {
-                            server.refresh_battery_level(event.handle()).err()
+                            server.refresh_battery_level(event.handle());
+                            None
                         } else {
                             Some(AttErrorCode::INSUFFICIENT_ENCRYPTION)
                         }

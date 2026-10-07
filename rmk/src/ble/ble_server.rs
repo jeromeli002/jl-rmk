@@ -47,7 +47,7 @@ pub(crate) struct Server {
 }
 
 impl Server<'_> {
-    pub(crate) fn refresh_battery_level(&self, handle: u16) -> Result<(), AttErrorCode> {
+    pub(crate) fn refresh_battery_level(&self, handle: u16) {
         let (attribute, status) = if handle == self.battery_service.level.handle {
             (
                 self.battery_service.level,
@@ -62,7 +62,7 @@ impl Server<'_> {
                     .iter()
                     .position(|level| level.handle == handle)
                 else {
-                    return Ok(());
+                    return;
                 };
                 (
                     self.peripheral_battery_services.levels[slot],
@@ -71,12 +71,13 @@ impl Server<'_> {
                 )
             }
             #[cfg(not(feature = "split"))]
-            return Ok(());
+            return;
         };
-        let BatteryStatus::Available { level: Some(level), .. } = status else {
-            return Err(AttErrorCode::UNLIKELY_ERROR);
-        };
-        self.set(&attribute, &level).map_err(|_| AttErrorCode::UNLIKELY_ERROR)
+        if let BatteryStatus::Available { level: Some(level), .. } = status
+            && let Err(e) = self.set(&attribute, &level)
+        {
+            warn!("Failed to refresh battery level: {:?}", e);
+        }
     }
 }
 
