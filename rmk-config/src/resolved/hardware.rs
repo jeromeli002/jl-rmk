@@ -207,6 +207,23 @@ impl crate::KeyboardTomlConfig {
     }
 }
 
+/// The DFU download partition must fit the flash and respect the sector erase
+/// granularity, matching what [`crate::resolved`] hands to codegen and what
+/// the W25Q driver can actually erase.
+fn validate_dfu_partition_size(flash_size: u32, dfu_partition_size: u32) -> Result<(), String> {
+    if dfu_partition_size == 0 || dfu_partition_size > flash_size {
+        return Err(format!(
+            "[dfu.external_flash] dfu_partition_size ({dfu_partition_size}) must be between 1 and flash_size ({flash_size})"
+        ));
+    }
+    if !dfu_partition_size.is_multiple_of(4096) {
+        return Err(format!(
+            "[dfu.external_flash] dfu_partition_size ({dfu_partition_size}) must be a multiple of 4096 (sector erase size)"
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -288,21 +305,4 @@ col_pins = ["PIN_10"]
             assert!(err.contains("between 1 and"), "unexpected error for {size}: {err}");
         }
     }
-}
-
-/// The DFU download partition must fit the flash and respect the sector erase
-/// granularity, matching what [`crate::resolved`] hands to codegen and what
-/// the W25Q driver can actually erase.
-fn validate_dfu_partition_size(flash_size: u32, dfu_partition_size: u32) -> Result<(), String> {
-    if dfu_partition_size == 0 || dfu_partition_size > flash_size {
-        return Err(format!(
-            "[dfu.external_flash] dfu_partition_size ({dfu_partition_size}) must be between 1 and flash_size ({flash_size})"
-        ));
-    }
-    if !dfu_partition_size.is_multiple_of(4096) {
-        return Err(format!(
-            "[dfu.external_flash] dfu_partition_size ({dfu_partition_size}) must be a multiple of 4096 (sector erase size)"
-        ));
-    }
-    Ok(())
 }
