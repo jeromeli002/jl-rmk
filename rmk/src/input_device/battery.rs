@@ -167,25 +167,20 @@ impl BatteryProcessor {
         let charging = event.charging;
         info!("Charging state changed: {:?}", charging);
 
-        let status = if charging {
-            // Keep current level when charging
-            let level = match self.battery_status {
-                BatteryStatus::Available { level, .. } => level,
-                BatteryStatus::Unavailable => None,
-            };
+        let level = match self.battery_status {
+            // ADC updates pause during charging, so refresh the level when charging ends.
             BatteryStatus::Available {
                 charge_state: ChargeState::Charging,
-                level,
-            }
-        } else {
-            // When unplugged, mark the level unknown and mark status as discharging
-            BatteryStatus::Available {
-                charge_state: ChargeState::Discharging,
-                level: None,
-            }
+                ..
+            } if !charging => None,
+            BatteryStatus::Available { level, .. } => level,
+            BatteryStatus::Unavailable => None,
         };
 
-        self.commit(status);
+        self.commit(BatteryStatus::Available {
+            charge_state: charging.into(),
+            level,
+        });
     }
 }
 
