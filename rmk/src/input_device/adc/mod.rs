@@ -18,8 +18,11 @@ pub enum AdcState {
     // DeepSleep,
 }
 
-/// Polls a chip-specific ADC reader returning millivolts at the input pin.
-/// A failed sample returns `None` and is retried after the polling interval.
+/// Publishes battery voltage readings from a custom async ADC reader.
+///
+/// The reader supplies the ADC input voltage in millivolts. Configure the
+/// voltage divider on [`BatteryProcessor`](crate::input_device::battery::BatteryProcessor)
+/// so it can calculate the battery voltage from each reading.
 #[rmk_macro::input_device(publish = crate::event::BatteryAdcEvent)]
 pub struct BatteryAdc<F: core::ops::AsyncFnMut() -> Option<u16>> {
     read_mv: F,
@@ -28,6 +31,18 @@ pub struct BatteryAdc<F: core::ops::AsyncFnMut() -> Option<u16>> {
 }
 
 impl<F: core::ops::AsyncFnMut() -> Option<u16>> BatteryAdc<F> {
+    /// Creates a battery input device with the given reader and sampling interval.
+    ///
+    /// `read_mv` must return `Some(input_mv)` for a successful reading or `None`
+    /// to skip a failed reading. Do not apply the battery voltage divider ratio
+    /// in the reader.
+    ///
+    /// When run, the device reads immediately, then waits `interval` after each
+    /// attempt before reading again. Failed readings do not publish an event.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `interval` is zero.
     pub fn new(read_mv: F, interval: embassy_time::Duration) -> Self {
         assert!(interval.as_ticks() > 0, "battery ADC interval must be nonzero");
         Self {
