@@ -19,13 +19,6 @@ pub(crate) fn current_battery_status() -> BatteryStatus {
     BATTERY_STATUS.lock(|c| c.get())
 }
 
-static LAST_BATTERY_LEVEL: Mutex<RawMutex, Cell<Option<u8>>> = Mutex::new(Cell::new(None));
-
-/// Last measured percentage in this boot, retained when the current level becomes unknown.
-pub(crate) fn last_battery_level() -> Option<u8> {
-    LAST_BATTERY_LEVEL.lock(|c| c.get())
-}
-
 /// Reads charging state from a GPIO pin and publishes ChargingStateEvent.
 ///
 /// This input device monitors a charging state pin and publishes events when
@@ -124,9 +117,6 @@ impl BatteryProcessor {
     /// [`BatteryStatusEvent`].
     fn commit(&mut self, status: BatteryStatus) {
         self.battery_status = status;
-        if let BatteryStatus::Available { level: Some(level), .. } = status {
-            LAST_BATTERY_LEVEL.lock(|c| c.set(Some(level)));
-        }
         BATTERY_STATUS.lock(|c| c.set(status));
         publish_event(BatteryStatusEvent::from(status));
     }

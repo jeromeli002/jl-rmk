@@ -1,5 +1,6 @@
 #[cfg(all(feature = "dongle", feature = "custom_message"))]
 use postcard::experimental::max_size::MaxSize;
+use rmk_types::battery::BatteryStatus;
 use trouble_host::prelude::*;
 use usbd_hid::descriptor::{AsInputReport, SerializedDescriptor};
 
@@ -50,7 +51,10 @@ impl Server<'_> {
         let (attribute, measured) = if handle == self.battery_service.level.handle {
             (
                 self.battery_service.level,
-                crate::input_device::battery::last_battery_level(),
+                match crate::input_device::battery::current_battery_status() {
+                    BatteryStatus::Available { level, .. } => level,
+                    BatteryStatus::Unavailable => None,
+                },
             )
         } else {
             #[cfg(feature = "split")]
