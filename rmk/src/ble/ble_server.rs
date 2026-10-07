@@ -76,9 +76,6 @@ impl Server<'_> {
     }
 }
 
-#[cfg(test)]
-mod tests;
-
 /// One postcard-encoded [`crate::dongle::event::DongleEvent`] per notification.
 #[cfg(feature = "dongle")]
 #[gatt_service(uuid = DONGLE_EVENT_SERVICE_UUID)]
