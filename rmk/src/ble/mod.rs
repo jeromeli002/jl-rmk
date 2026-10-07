@@ -14,6 +14,7 @@ use embassy_time::{Duration, Instant, Timer};
 use rmk_types::ble::BleState;
 use rmk_types::connection::ConnectionType;
 use rmk_types::led_indicator::LedIndicator;
+use trouble_host::att::{AttClient, AttReq};
 use trouble_host::prelude::*;
 
 use crate::ble::adv::{Adv, advertise};
@@ -512,7 +513,7 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                     GattEvent::Read(event) => {
                         debug!("Read GATT Event: {:?}", event.handle());
                         if conn.raw().security_level()?.encrypted() {
-                            None
+                            server.refresh_battery_level(event.handle()).err()
                         } else {
                             Some(AttErrorCode::INSUFFICIENT_ENCRYPTION)
                         }
@@ -615,27 +616,28 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                             Some(AttErrorCode::INSUFFICIENT_ENCRYPTION)
                         }
                     }
+                    GattEvent::Other(event)
+                        if matches!(
+                            event.payload().incoming(),
+                            AttClient::Request(AttReq::ReadMultiple { .. })
+                        ) =>
+                    {
+                        Some(AttErrorCode::REQUEST_NOT_SUPPORTED)
+                    }
                     GattEvent::Other(_) => None,
                     GattEvent::NotAllowed(_) => None,
                 };
 
-                let response = if result.is_none() && matches!(&gatt_event, GattEvent::Read(_) | GattEvent::Other(_)) {
-                    server.handle_read(&gatt_event.payload().incoming())
+                // This step is also performed at drop(), but writing it explicitly is necessary
+                // in order to ensure reply is sent.
+                let result = if let Some(code) = result {
+                    gatt_event.reject(code)
                 } else {
-                    None
+                    gatt_event.accept()
                 };
-                if let Some(response) = response {
-                    gatt_event.into_payload().reply(response).await?;
-                } else {
-                    let reply = if let Some(code) = result {
-                        gatt_event.reject(code)
-                    } else {
-                        gatt_event.accept()
-                    };
-                    match reply {
-                        Ok(reply) => reply.send().await,
-                        Err(e) => warn!("[gatt] error sending response: {:?}", e),
-                    }
+                match result {
+                    Ok(reply) => reply.send().await,
+                    Err(e) => warn!("[gatt] error sending response: {:?}", e),
                 }
 
                 // Update CCCD table after processing the event

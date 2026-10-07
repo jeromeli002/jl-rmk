@@ -1,7 +1,3 @@
-# Runtime test capacities and one peripheral Battery Level characteristic.
-[rmk]
-auto_mouse_layer_max_num = 2
-
 [split]
 connection = "ble"
 

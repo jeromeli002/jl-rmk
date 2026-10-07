@@ -19,14 +19,17 @@ cargo +stable "${nx[@]}" --manifest-path rmk-types/Cargo.toml
 cargo +stable "${nx[@]}" --manifest-path rmk-types/Cargo.toml --features host
 cargo +stable "${nx[@]}" --manifest-path rmk-types/Cargo.toml --features steno
 cargo +stable "${nx[@]}" --manifest-path rmk-macro/Cargo.toml --features _simulator
-# Include a battery peripheral so split BLE assertions always run.
 for feats in "${RMK_TEST_FEATURESETS[@]}"; do
     if [[ -z "$feats" ]]; then
-        KEYBOARD_TOML_PATH="$repo_root/rmk/tests/ble_battery.toml" cargo +stable "${nx[@]}" --manifest-path rmk/Cargo.toml --no-default-features
+        cargo +stable "${nx[@]}" --manifest-path rmk/Cargo.toml --no-default-features
     else
-        KEYBOARD_TOML_PATH="$repo_root/rmk/tests/ble_battery.toml" cargo +stable "${nx[@]}" --manifest-path rmk/Cargo.toml --no-default-features --features "$feats"
+        cargo +stable "${nx[@]}" --manifest-path rmk/Cargo.toml --no-default-features --features "$feats"
     fi
 done
+
+KEYBOARD_TOML_PATH="$repo_root/rmk/tests/ble_battery.toml" cargo +stable "${nx[@]}" \
+    --manifest-path rmk/Cargo.toml --no-default-features --features split,vial,storage,async_matrix,_ble \
+    --run-ignored only -E 'test(ble::ble_server::tests::peripheral_reads_)'
 
 # Doctests: nextest does not run them. rmk/ and rmk-macro/ have `doctest = false`,
 # so only rmk-types and rmk-config need a separate --doc pass.

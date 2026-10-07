@@ -198,22 +198,28 @@ fn battery_reads_keep_encryption_permissions() {
         assert_eq!(reply(&[0x0a, lo, hi]), [1, 0x0a, lo, hi, 5]);
         let [dl, dh] = server.device_config_service.manufacturer_name.handle.to_le_bytes();
         assert_eq!(reply(&[0x20, dl, dh, lo, hi]), [1, 0x20, 0, 0, 5]);
-        #[cfg(feature = "split")]
-        {
-            let [lo, hi] = server
-                .peripheral_battery_services
-                .levels
-                .first()
-                .expect("set KEYBOARD_TOML_PATH to tests/ble_battery.toml for split BLE tests")
-                .handle
-                .to_le_bytes();
-            assert_eq!(reply(&[0x0a, lo, hi]), [1, 0x0a, lo, hi, 5]);
-        }
     });
 }
 
 #[cfg(feature = "split")]
 #[test]
+#[ignore = "requires KEYBOARD_TOML_PATH=rmk/tests/ble_battery.toml"]
+fn peripheral_reads_keep_encryption_permissions() {
+    with_connection(false, |server, reply| {
+        let [lo, hi] = server
+            .peripheral_battery_services
+            .levels
+            .first()
+            .expect("requires the split battery fixture")
+            .handle
+            .to_le_bytes();
+        assert_eq!(reply(&[0x0a, lo, hi]), [1, 0x0a, lo, hi, 5]);
+    });
+}
+
+#[cfg(feature = "split")]
+#[test]
+#[ignore = "requires KEYBOARD_TOML_PATH=rmk/tests/ble_battery.toml"]
 fn peripheral_reads_use_their_own_history() {
     with_connection(true, |server, reply| {
         let peripheral = server
@@ -246,20 +252,10 @@ fn peripheral_reads_use_their_own_history() {
 }
 
 #[test]
-fn unsupported_batch_reads_keep_native_validation() {
+fn unsupported_batch_reads_are_rejected() {
     with_connection(true, |server, reply| {
         let [lo, hi] = server.battery_service.level.handle.to_le_bytes();
-        let [dl, dh] = server.device_config_service.manufacturer_name.handle.to_le_bytes();
-        assert_eq!(reply(&[0x20, lo, hi, 0xff, 0xff]), [1, 0x20, 0, 0, 1]);
-        assert_eq!(reply(&[0x20, dl, dh, lo, hi]), [1, 0x20, lo, hi, 0x0e]);
-        let mut battery = BatteryProcessor::new(1, 1);
-        let mut run = pin!(battery.run());
-        assert_pending(run.as_mut());
-        publish_event(BatteryAdcEvent(3600));
-        assert_pending(run.as_mut());
-        server.set(&server.battery_service.level, &42).unwrap();
-        assert_eq!(reply(&[0x20, dl, dh, lo, hi]), [1, 0x20, 0, 0, 6]);
-        assert_eq!(reply(&[0x20, lo, hi]), [1, 0x20, 0, 0, 4]);
-        assert_eq!(server.get(&server.battery_service.level).unwrap(), 42);
+        assert_eq!(reply(&[0x20, lo, hi, lo, hi]), [1, 0x20, 0, 0, 6]);
+        assert_eq!(reply(&[0x20]), [1, 0x20, 0, 0, 6]);
     });
 }
