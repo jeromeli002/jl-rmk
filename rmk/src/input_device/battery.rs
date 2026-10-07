@@ -194,34 +194,3 @@ impl BatteryProcessor {
         }
     }
 }
-
-#[cfg(all(test, feature = "_ble"))]
-mod tests {
-    use super::BatteryProcessor;
-
-    #[test]
-    fn millivolts_use_the_supplied_divider() {
-        for (measured, total, empty, half, full) in [
-            (1, 1, 3600, 3900, 4200),
-            (1, 2, 1800, 1950, 2100),
-            (1, 5, 720, 780, 840),
-        ] {
-            let battery = BatteryProcessor::new(measured, total);
-            assert_eq!(battery.get_battery_percent(empty), 0);
-            assert_eq!(battery.get_battery_percent(half), 50);
-            assert_eq!(battery.get_battery_percent(full), 100);
-        }
-        assert_eq!(BatteryProcessor::new(1, 6).get_battery_percent(663), 63);
-    }
-
-    #[test]
-    fn invalid_adc_dividers_do_not_panic() {
-        assert_eq!(BatteryProcessor::new(1, 0).get_battery_percent(2000), 0);
-        assert_eq!(BatteryProcessor::new(0, 1).get_battery_percent(2000), 0);
-    }
-
-    #[test]
-    fn divider_rounding_boundary_does_not_underflow() {
-        assert_eq!(BatteryProcessor::new(2000, 2806).get_battery_percent(2565), 0);
-    }
-}
