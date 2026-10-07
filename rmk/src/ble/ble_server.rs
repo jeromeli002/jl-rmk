@@ -48,13 +48,10 @@ pub(crate) struct Server {
 
 impl Server<'_> {
     pub(crate) fn refresh_battery_level(&self, handle: u16) -> Result<(), AttErrorCode> {
-        let (attribute, measured) = if handle == self.battery_service.level.handle {
+        let (attribute, status) = if handle == self.battery_service.level.handle {
             (
                 self.battery_service.level,
-                match crate::input_device::battery::current_battery_status() {
-                    BatteryStatus::Available { level, .. } => level,
-                    BatteryStatus::Unavailable => None,
-                },
+                crate::input_device::battery::current_battery_status(),
             )
         } else {
             #[cfg(feature = "split")]
@@ -69,13 +66,16 @@ impl Server<'_> {
                 };
                 (
                     self.peripheral_battery_services.levels[slot],
-                    crate::split::driver::last_peripheral_battery_level(crate::SPLIT_BATTERY_PERIPHERAL_IDS[slot]),
+                    crate::split::driver::current_peripheral_battery_status(crate::SPLIT_BATTERY_PERIPHERAL_IDS[slot])
+                        .unwrap_or(BatteryStatus::Unavailable),
                 )
             }
             #[cfg(not(feature = "split"))]
             return Ok(());
         };
-        let level = measured.ok_or(AttErrorCode::UNLIKELY_ERROR)?;
+        let BatteryStatus::Available { level: Some(level), .. } = status else {
+            return Err(AttErrorCode::UNLIKELY_ERROR);
+        };
         self.set(&attribute, &level).map_err(|_| AttErrorCode::UNLIKELY_ERROR)
     }
 }

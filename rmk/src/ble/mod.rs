@@ -14,7 +14,6 @@ use embassy_time::{Duration, Instant, Timer};
 use rmk_types::ble::BleState;
 use rmk_types::connection::ConnectionType;
 use rmk_types::led_indicator::LedIndicator;
-use trouble_host::att::{AttClient, AttReq};
 use trouble_host::prelude::*;
 
 use crate::ble::adv::{Adv, advertise};
@@ -615,14 +614,6 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                         } else {
                             Some(AttErrorCode::INSUFFICIENT_ENCRYPTION)
                         }
-                    }
-                    GattEvent::Other(event)
-                        if matches!(
-                            event.payload().incoming(),
-                            AttClient::Request(AttReq::ReadMultiple { .. })
-                        ) =>
-                    {
-                        Some(AttErrorCode::REQUEST_NOT_SUPPORTED)
                     }
                     GattEvent::Other(_) => None,
                     GattEvent::NotAllowed(_) => None,
