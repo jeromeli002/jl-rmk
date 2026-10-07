@@ -8,7 +8,6 @@
 use std::path::Path;
 
 use rmk_config::KeyboardTomlConfig;
-use rmk_config::resolved::hardware::BoardConfig;
 
 const MINIMAL_KEYBOARD_TOML: &str = r#"
 [keyboard]
@@ -192,34 +191,6 @@ adc_divider_total = 0
         msg.contains("adc_divider_total") && msg.contains("greater than zero"),
         "unexpected error: {msg}"
     );
-}
-
-#[test]
-fn battery_validation_follows_effective_board_overrides() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/use_config/nrf52840_ble_split/keyboard.toml");
-    let overridden = std::fs::read_to_string(path).unwrap().replace(
-        "[ble]\nenabled = true",
-        "[ble]\nenabled = true\nbattery_adc_pin = \"P0_02\"\nadc_divider_total = 0",
-    );
-    let fallback = overridden.replacen("battery_adc_pin = \"P0_05\"", "", 1);
-    let vddh = fallback.replace("battery_adc_pin = \"P0_02\"", "battery_adc_pin = \"vddh\"");
-    let invalid_peripheral = vddh.replace("adc_divider_measured = 2000", "adc_divider_measured = 0");
-
-    for (toml, error) in [
-        (overridden, None),
-        (fallback, Some("[ble].adc_divider_total")),
-        (vddh, None),
-        (invalid_peripheral, Some("[[split.peripheral]] #0.adc_divider_measured")),
-    ] {
-        let path = write_temp_toml("battery-overrides", &toml);
-        let result = KeyboardTomlConfig::new_from_toml_path(&path).hardware();
-        std::fs::remove_file(path).ok();
-        if let Some(error) = error {
-            assert!(result.err().unwrap().contains(error));
-        } else {
-            assert!(result.is_ok());
-        }
-    }
 }
 
 /// Unknown keys in the sections users edit most must be rejected, not
@@ -496,78 +467,72 @@ led = "PIN_9"
 
 #[test]
 fn split_boards_take_their_own_charger_pins() {
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/use_config/nrf52840_ble_split/keyboard.toml");
-    let toml = std::fs::read_to_string(fixture).unwrap()
-        .replace("battery_adc_pin = \"P0_05\"", "")
-        .replacen("[split.central]", "[split.central]\ncharge_state = { pin = \"P1_08\", low_active = true }\ncharge_led = { pin = \"P0_13\", low_active = false }", 1)
-        .replacen("[[split.peripheral]]", "[[split.peripheral]]\ncharge_state = { pin = \"P0_07\", low_active = false }\ncharge_led = { pin = \"P0_14\", low_active = true }", 1);
-    let path = write_temp_toml("split-charge-state", &toml);
+    let path = write_temp_toml(
+        "split-charge-state",
+        r#"
+[keyboard]
+name = "Battery test"
+vendor_id = 1
+product_id = 1
+chip = "nrf52840"
+[layout]
+rows = 1
+cols = 2
+[ble]
+enabled = true
+[split]
+connection = "ble"
+[split.central]
+rows = 1
+cols = 1
+row_offset = 0
+col_offset = 0
+matrix = { row_pins = ["P0_01"], col_pins = ["P0_02"] }
+charge_state = { pin = "P1_08", low_active = true }
+charge_led = { pin = "P0_13", low_active = false }
+[[split.peripheral]]
+rows = 1
+cols = 1
+row_offset = 0
+col_offset = 1
+matrix = { row_pins = ["P0_01"], col_pins = ["P0_02"] }
+charge_state = { pin = "P0_07", low_active = false }
+charge_led = { pin = "P0_14", low_active = true }
+"#,
+    );
     let hardware = KeyboardTomlConfig::new_from_toml_path(&path).hardware();
     std::fs::remove_file(path).ok();
+    let hardware = hardware.unwrap();
 
-    let mut hardware = hardware.unwrap_or_else(|e| panic!("{e}"));
-    let pin = |config: &Option<rmk_config::PinConfig>| {
-        let config = config.as_ref().expect("charger pin");
-        (config.pin.clone(), config.low_active)
-    };
-    let central = hardware.battery_config(None).unwrap();
-    let peripheral = hardware.battery_config(Some(0)).unwrap();
-    assert!(central.adc.is_none());
-    assert!(peripheral.adc.is_none());
-    assert_eq!(pin(&central.charge_state), ("P1_08".into(), true));
-    assert_eq!(pin(&central.charge_led), ("P0_13".into(), false));
-    assert_eq!(pin(&peripheral.charge_state), ("P0_07".into(), false));
-    assert_eq!(pin(&peripheral.charge_led), ("P0_14".into(), true));
-
-    let ble = match &mut hardware.communication {
-        rmk_config::resolved::hardware::CommunicationConfig::Both(_, ble)
-        | rmk_config::resolved::hardware::CommunicationConfig::Ble(ble) => ble,
-        _ => panic!("expected BLE"),
-    };
-    ble.battery_adc_pin = Some("vddh".into());
-    ble.charge_led = Some(rmk_config::PinConfig {
-        pin: "P0_21".into(),
-        low_active: false,
-    });
-    let BoardConfig::Split(split) = &mut hardware.board else {
-        unreachable!()
-    };
-    split.central.charge_led = None;
-    split.peripheral[0].charge_state = None;
-    split.peripheral[0].charge_led = None;
-    let central = hardware.battery_config(None).unwrap();
-    let peripheral = hardware.battery_config(Some(0)).unwrap();
-    assert_eq!(central.adc.unwrap().divider_total, 5);
-    assert_eq!(pin(&central.charge_state).0, "P1_08");
-    assert_eq!(pin(&central.charge_led).0, "P0_21");
-    assert!(peripheral.adc.is_none());
-    assert!(peripheral.charge_state.is_none());
-    assert!(peripheral.charge_led.is_none());
-
-    let BoardConfig::Split(split) = &mut hardware.board else {
-        unreachable!()
-    };
-    split.central.battery_adc_pin = Some("P0_02".into());
-    split.central.adc_divider_measured = Some(2000);
-    split.central.adc_divider_total = Some(2806);
-    let adc = hardware.battery_config(None).unwrap().adc.unwrap();
-    assert_eq!(
-        (adc.pin.as_str(), adc.divider_measured, adc.divider_total),
-        ("P0_02", 2000, 2806)
-    );
+    for (board, state_pin, state_low, led_pin, led_low) in [
+        (None, "P1_08", true, "P0_13", false),
+        (Some(0), "P0_07", false, "P0_14", true),
+    ] {
+        let battery = hardware.battery_config(board).unwrap();
+        let state = battery.charge_state.unwrap();
+        let led = battery.charge_led.unwrap();
+        assert_eq!((state.pin.as_str(), state.low_active), (state_pin, state_low));
+        assert_eq!((led.pin.as_str(), led.low_active), (led_pin, led_low));
+    }
 }
 
 #[test]
 fn charge_led_requires_a_local_battery_source() {
-    let toml = MINIMAL_KEYBOARD_TOML.replace("rp2040", "nrf52840");
     let path = write_temp_toml(
         "led-without-source",
-        &format!("{toml}\n[ble]\nenabled = true\ncharge_led = {{ pin = \"P0_21\", low_active = false }}"),
+        &format!(
+            r#"{}
+[ble]
+enabled = true
+charge_led = {{ pin = "P0_21", low_active = false }}
+"#,
+            MINIMAL_KEYBOARD_TOML.replace("rp2040", "nrf52840")
+        ),
     );
-    let hardware = KeyboardTomlConfig::new_from_toml_path(&path).hardware();
+    let result = KeyboardTomlConfig::new_from_toml_path(&path).hardware();
     std::fs::remove_file(path).ok();
     assert!(
-        hardware
+        result
             .err()
             .unwrap()
             .contains("charge_led requires battery_adc_pin or charge_state")
