@@ -1,3 +1,5 @@
+#[cfg(feature = "_esp_ble")]
+pub mod esp32;
 #[cfg(feature = "rp2040")]
 pub mod rp2040;
 

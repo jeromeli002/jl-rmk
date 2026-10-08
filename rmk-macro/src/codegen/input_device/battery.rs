@@ -65,6 +65,7 @@ mod tests {
         for (example, side, adc_pin, charge_pin, led_pin) in [
             ("nrf52840_ble", None, "P0_05", "P0_20", "P0_21"),
             ("rp2040", None, "PIN_26", "PIN_10", "PIN_11"),
+            ("esp32c3_ble", None, "GPIO0", "GPIO1", "GPIO2"),
             ("nrf52840_ble_split", None, "P0_05", "P0_20", "P0_21"),
             ("nrf52840_ble_split", Some(0), "P0_05", "P0_20", "P0_21"),
         ] {
