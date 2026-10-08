@@ -9,7 +9,6 @@ use rmk_types::ble::{BLE_ADV_NAME_MAX_LEN, BLE_DIS_STRING_MAX_LEN};
 
 use super::behavior::expand_behavior_config;
 use super::chip::bind_interrupt::expand_bind_interrupt;
-use super::chip::ble::expand_ble_config;
 use super::chip::chip_init::expand_chip_init;
 use super::chip::comm::expand_usb_init;
 use super::chip::flash::expand_flash_init;
@@ -212,142 +211,6 @@ pub(crate) fn expand_imports_and_constants(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::validate_feature_config_parity;
-
-    /// Build the enabled-Cargo-features list that `validate_feature_config_parity` reads.
-    fn features(enabled: &[&str]) -> Option<Vec<String>> {
-        Some(enabled.iter().map(|f| f.to_string()).collect())
-    }
-
-    #[test]
-    fn accepts_matching_feature_config_states() {
-        assert!(
-            validate_feature_config_parity(
-                &features(&["storage", "vial"]),
-                true,
-                true,
-                false,
-                false,
-            )
-            .is_ok()
-        );
-        assert!(validate_feature_config_parity(&features(&[]), false, false, false, false).is_ok());
-        assert!(
-            validate_feature_config_parity(&features(&["storage"]), true, false, false, false)
-                .is_ok()
-        );
-        assert!(
-            validate_feature_config_parity(
-                &features(&["storage", "rynk"]),
-                true,
-                false,
-                true,
-                false,
-            )
-            .is_ok()
-        );
-        assert!(
-            validate_feature_config_parity(&features(&["dfu_lock"]), false, false, false, true,)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn rejects_storage_enabled_in_config_without_feature() {
-        let err =
-            validate_feature_config_parity(&features(&[]), true, false, false, false).unwrap_err();
-        assert_eq!(
-            err,
-            "If the \"storage\" Cargo feature is disabled, `storage.enabled` must be set to false in keyboard.toml."
-        );
-    }
-
-    #[test]
-    fn rejects_storage_feature_without_config() {
-        let err =
-            validate_feature_config_parity(&features(&["storage"]), false, false, false, false)
-                .unwrap_err();
-        assert_eq!(
-            err,
-            "`storage.enabled = false` in keyboard.toml requires disabling the \"storage\" Cargo feature for rmk in Cargo.toml (for example with `default-features = false` and explicitly re-enabling the features you need)."
-        );
-    }
-
-    #[test]
-    fn rejects_vial_enabled_in_config_without_feature() {
-        let err =
-            validate_feature_config_parity(&features(&[]), false, true, false, false).unwrap_err();
-        assert_eq!(
-            err,
-            "If the \"vial\" Cargo feature is disabled, `host.vial_enabled` must be set to false in keyboard.toml."
-        );
-    }
-
-    #[test]
-    fn rejects_vial_feature_without_config() {
-        let err = validate_feature_config_parity(&features(&["vial"]), false, false, false, false)
-            .unwrap_err();
-        assert_eq!(
-            err,
-            "`host.vial_enabled = false` in keyboard.toml requires disabling the \"vial\" Cargo feature for rmk in Cargo.toml (for example with `default-features = false` and explicitly re-enabling the features you need)."
-        );
-    }
-
-    #[test]
-    fn rejects_rynk_enabled_in_config_without_feature() {
-        let err =
-            validate_feature_config_parity(&features(&[]), false, false, true, false).unwrap_err();
-        assert_eq!(
-            err,
-            "If the \"rynk\" Cargo feature is disabled, `host.rynk_enabled` must be set to false in keyboard.toml."
-        );
-    }
-
-    #[test]
-    fn rejects_rynk_feature_without_config() {
-        let err = validate_feature_config_parity(&features(&["rynk"]), false, false, false, false)
-            .unwrap_err();
-        assert_eq!(
-            err,
-            "`host.rynk_enabled = false` in keyboard.toml requires disabling the \"rynk\" Cargo feature for rmk in Cargo.toml (for example with `default-features = false` and explicitly re-enabling the features you need)."
-        );
-    }
-
-    #[test]
-    fn rejects_vial_and_rynk_both_enabled() {
-        let err =
-            validate_feature_config_parity(&features(&["vial", "rynk"]), false, true, true, false)
-                .unwrap_err();
-        assert_eq!(
-            err,
-            "`host.vial_enabled` and `host.rynk_enabled` are mutually exclusive — set exactly one to true (the underlying Cargo features for rmk also conflict)."
-        );
-    }
-
-    #[test]
-    fn rejects_dfu_unlock_keys_without_feature() {
-        let err =
-            validate_feature_config_parity(&features(&[]), false, false, false, true).unwrap_err();
-        assert_eq!(
-            err,
-            "`[dfu].unlock_keys` requires enabling rmk's \"dfu_lock\" Cargo feature."
-        );
-    }
-
-    #[test]
-    fn rejects_dfu_lock_feature_without_unlock_keys() {
-        let err =
-            validate_feature_config_parity(&features(&["dfu_lock"]), false, false, false, false)
-                .unwrap_err();
-        assert_eq!(
-            err,
-            "The \"dfu_lock\" Cargo feature requires a non-empty `[dfu].unlock_keys` list."
-        );
-    }
-}
-
 fn expand_main(
     host: &Host,
     hardware: &Hardware,
@@ -366,7 +229,6 @@ fn expand_main(
     let behavior_config = expand_behavior_config(behavior);
     let matrix_config = expand_matrix_config(hardware, rmk_features);
     let output_config = expand_output_config(hardware);
-    let (ble_config, set_ble_config) = expand_ble_config(hardware);
     let keymap_and_storage = expand_keymap_and_storage(hardware, keymap);
     let split_central_config = expand_split_central_config(hardware);
     let (input_device_config, devices, processors) = expand_input_device_config(hardware);
@@ -465,7 +327,6 @@ fn expand_main(
                 #lock_config
                 #rynk_layout_field
                 storage_config,
-                #set_ble_config
                 ..Default::default()
             };
         }
@@ -477,7 +338,6 @@ fn expand_main(
                 #vial_config
                 #lock_config
                 #rynk_layout_field
-                #set_ble_config
                 ..Default::default()
             };
         }
@@ -518,9 +378,6 @@ fn expand_main(
 
             // Initialize flash driver as `storage_partition` and storage config as `storage_config`
             #flash_init
-
-            // Initialize ble config as `ble_battery_config`
-            #ble_config
 
             // Bake the physical-layout blob (rynk) as a compile-time const
             #layout_blob_static
@@ -756,5 +613,141 @@ pub(crate) fn get_debouncer_type(matrix_config: &MatrixConfig) -> TokenStream2 {
     match matrix_config.debouncer {
         DebouncerType::Fast => quote! { ::rmk::debounce::fast_debouncer::FastDebouncer },
         DebouncerType::Default => quote! { ::rmk::debounce::default_debouncer::DefaultDebouncer },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_feature_config_parity;
+
+    /// Build the enabled-Cargo-features list that `validate_feature_config_parity` reads.
+    fn features(enabled: &[&str]) -> Option<Vec<String>> {
+        Some(enabled.iter().map(|f| f.to_string()).collect())
+    }
+
+    #[test]
+    fn accepts_matching_feature_config_states() {
+        assert!(
+            validate_feature_config_parity(
+                &features(&["storage", "vial"]),
+                true,
+                true,
+                false,
+                false,
+            )
+            .is_ok()
+        );
+        assert!(validate_feature_config_parity(&features(&[]), false, false, false, false).is_ok());
+        assert!(
+            validate_feature_config_parity(&features(&["storage"]), true, false, false, false)
+                .is_ok()
+        );
+        assert!(
+            validate_feature_config_parity(
+                &features(&["storage", "rynk"]),
+                true,
+                false,
+                true,
+                false,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_feature_config_parity(&features(&["dfu_lock"]), false, false, false, true,)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn rejects_storage_enabled_in_config_without_feature() {
+        let err =
+            validate_feature_config_parity(&features(&[]), true, false, false, false).unwrap_err();
+        assert_eq!(
+            err,
+            "If the \"storage\" Cargo feature is disabled, `storage.enabled` must be set to false in keyboard.toml."
+        );
+    }
+
+    #[test]
+    fn rejects_storage_feature_without_config() {
+        let err =
+            validate_feature_config_parity(&features(&["storage"]), false, false, false, false)
+                .unwrap_err();
+        assert_eq!(
+            err,
+            "`storage.enabled = false` in keyboard.toml requires disabling the \"storage\" Cargo feature for rmk in Cargo.toml (for example with `default-features = false` and explicitly re-enabling the features you need)."
+        );
+    }
+
+    #[test]
+    fn rejects_vial_enabled_in_config_without_feature() {
+        let err =
+            validate_feature_config_parity(&features(&[]), false, true, false, false).unwrap_err();
+        assert_eq!(
+            err,
+            "If the \"vial\" Cargo feature is disabled, `host.vial_enabled` must be set to false in keyboard.toml."
+        );
+    }
+
+    #[test]
+    fn rejects_vial_feature_without_config() {
+        let err = validate_feature_config_parity(&features(&["vial"]), false, false, false, false)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "`host.vial_enabled = false` in keyboard.toml requires disabling the \"vial\" Cargo feature for rmk in Cargo.toml (for example with `default-features = false` and explicitly re-enabling the features you need)."
+        );
+    }
+
+    #[test]
+    fn rejects_rynk_enabled_in_config_without_feature() {
+        let err =
+            validate_feature_config_parity(&features(&[]), false, false, true, false).unwrap_err();
+        assert_eq!(
+            err,
+            "If the \"rynk\" Cargo feature is disabled, `host.rynk_enabled` must be set to false in keyboard.toml."
+        );
+    }
+
+    #[test]
+    fn rejects_rynk_feature_without_config() {
+        let err = validate_feature_config_parity(&features(&["rynk"]), false, false, false, false)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "`host.rynk_enabled = false` in keyboard.toml requires disabling the \"rynk\" Cargo feature for rmk in Cargo.toml (for example with `default-features = false` and explicitly re-enabling the features you need)."
+        );
+    }
+
+    #[test]
+    fn rejects_vial_and_rynk_both_enabled() {
+        let err =
+            validate_feature_config_parity(&features(&["vial", "rynk"]), false, true, true, false)
+                .unwrap_err();
+        assert_eq!(
+            err,
+            "`host.vial_enabled` and `host.rynk_enabled` are mutually exclusive — set exactly one to true (the underlying Cargo features for rmk also conflict)."
+        );
+    }
+
+    #[test]
+    fn rejects_dfu_unlock_keys_without_feature() {
+        let err =
+            validate_feature_config_parity(&features(&[]), false, false, false, true).unwrap_err();
+        assert_eq!(
+            err,
+            "`[dfu].unlock_keys` requires enabling rmk's \"dfu_lock\" Cargo feature."
+        );
+    }
+
+    #[test]
+    fn rejects_dfu_lock_feature_without_unlock_keys() {
+        let err =
+            validate_feature_config_parity(&features(&["dfu_lock"]), false, false, false, false)
+                .unwrap_err();
+        assert_eq!(
+            err,
+            "The \"dfu_lock\" Cargo feature requires a non-empty `[dfu].unlock_keys` list."
+        );
     }
 }
