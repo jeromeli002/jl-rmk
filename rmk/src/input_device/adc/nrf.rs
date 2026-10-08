@@ -8,7 +8,7 @@ use tests::Saadc;
 use super::AnalogEventType;
 use crate::event::{Axis, AxisEvent, AxisValType, BatteryAdcEvent, PointingEvent};
 
-/// Events produced by NrfAdc.
+/// Joystick and battery readings from the shared ADC.
 #[derive(Event, Clone, Debug)]
 pub enum NrfAdcEvent {
     Pointing(PointingEvent),
@@ -23,11 +23,10 @@ pub struct NrfAdc<'a, const PIN_NUM: usize, const EVENT_NUM: usize> {
     sample: [i16; PIN_NUM],
     previous_sample: [i16; PIN_NUM],
     event_type: [AnalogEventType; EVENT_NUM],
-    /// Device id emitted in PointingEvent for each event slot.
-    /// Indexed by event_state; irrelevant for Battery slots (use 0).
+    /// Pointing device ID for each event; battery entries are unused.
     event_device_ids: [u8; EVENT_NUM],
-    event_state: u8,
-    channel_state: u8,
+    event_index: u8,
+    channel_index: u8,
     last_activity: Option<Instant>,
     has_sample: bool,
     next_battery_report: Instant,
@@ -35,6 +34,8 @@ pub struct NrfAdc<'a, const PIN_NUM: usize, const EVENT_NUM: usize> {
 }
 
 impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT_NUM> {
+    /// Read events in ADC channel order, with one channel per battery and one per joystick axis.
+    ///
     /// Battery channels require Embassy's default SAADC configuration.
     pub fn new(
         saadc: Saadc<'a, PIN_NUM>,
@@ -59,8 +60,8 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
             light_sleep,
             sample: [0; PIN_NUM],
             previous_sample: [0; PIN_NUM],
-            event_state: EVENT_NUM as u8,
-            channel_state: 0,
+            event_index: EVENT_NUM as u8,
+            channel_index: 0,
             last_activity: None,
             has_sample: false,
             next_battery_report: Instant::MIN,
@@ -73,7 +74,7 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
     async fn read_nrf_adc_event(&mut self) -> NrfAdcEvent {
         loop {
             // Sample once, then return every event from that scan before waiting again.
-            if self.event_state == EVENT_NUM as u8 {
+            if self.event_index == EVENT_NUM as u8 {
                 if self.has_sample {
                     let interval = if self
                         .last_activity
@@ -84,63 +85,52 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
                         self.light_sleep.unwrap_or(self.polling_interval)
                     };
                     embassy_time::Timer::after(interval).await;
-                    if self.channel_state != PIN_NUM as u8 {
+                    if self.channel_index != PIN_NUM as u8 {
                         error!("ADC channel count does not match the configured events");
                     }
                     self.previous_sample = self.sample;
                 }
                 self.saadc.sample(&mut self.sample).await;
                 if !self.has_sample {
+                    // Establish a baseline without treating startup readings as movement.
                     self.previous_sample = self.sample;
                     self.has_sample = true;
                 }
-                self.channel_state = 0;
-                self.event_state = 0;
+                self.channel_index = 0;
+                self.event_index = 0;
             }
 
-            match self.event_type[self.event_state as usize] {
-                AnalogEventType::Joystick(sz) => {
-                    let mut e = [
-                        AxisEvent {
-                            typ: AxisValType::Rel,
-                            axis: Axis::X,
-                            value: 0,
-                        },
-                        AxisEvent {
-                            typ: AxisValType::Rel,
-                            axis: Axis::Y,
-                            value: 0,
-                        },
-                        AxisEvent {
-                            typ: AxisValType::Rel,
-                            axis: Axis::Z,
-                            value: 0,
-                        },
-                    ];
-                    if sz > 3 || sz == 0 {
-                        error!("Joystick with more than 3 dimensions or empty is not supported. Skip this event");
-                        self.event_state += 1;
+            match self.event_type[self.event_index as usize] {
+                AnalogEventType::Joystick(axis_count) => {
+                    let mut axes = [Axis::X, Axis::Y, Axis::Z].map(|axis| AxisEvent {
+                        typ: AxisValType::Rel,
+                        axis,
+                        value: 0,
+                    });
+                    if !(1..=3).contains(&axis_count) {
+                        error!("Joystick requires 1 to 3 axes; skipping event");
+                        self.event_index += 1;
                         continue;
                     }
-                    for axis in &mut e[..usize::from(sz)] {
-                        let channel = self.channel_state as usize;
+                    for axis in &mut axes[..usize::from(axis_count)] {
+                        let channel = self.channel_index as usize;
                         let value = self.sample[channel];
                         if (i32::from(value) - i32::from(self.previous_sample[channel])).abs() > 150 {
                             self.last_activity = Some(Instant::now());
                         }
                         axis.value = (value + i16::MIN / 2).saturating_mul(2);
-                        self.channel_state += 1;
+                        self.channel_index += 1;
                     }
-                    let device_id = self.event_device_ids[self.event_state as usize];
-                    self.event_state += 1;
-                    return NrfAdcEvent::Pointing(PointingEvent { device_id, axes: e });
+                    let device_id = self.event_device_ids[self.event_index as usize];
+                    self.event_index += 1;
+                    return NrfAdcEvent::Pointing(PointingEvent { device_id, axes });
                 }
                 AnalogEventType::Battery => {
                     // Convert to millivolts using Embassy's default SAADC settings.
                     let battery_adc_value =
-                        (u32::from(self.sample[self.channel_state as usize].max(0) as u16) * 3600 / 4096) as u16;
-                    self.channel_state += 1;
-                    self.event_state += 1;
+                        (u32::from(self.sample[self.channel_index as usize].max(0) as u16) * 3600 / 4096) as u16;
+                    self.channel_index += 1;
+                    self.event_index += 1;
                     let now = Instant::now();
                     if now < self.next_battery_report {
                         continue;
