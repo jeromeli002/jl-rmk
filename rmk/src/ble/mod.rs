@@ -95,7 +95,7 @@ where
     controller: Option<C>,
     address: [u8; 6],
     device_config: DeviceConfig<'static>,
-    config: BleBatteryConfig<'static>,
+    config: BleBatteryConfig,
     /// One matrix region per split peripheral.
     #[cfg(feature = "split")]
     peripheral_matrices: [PeripheralMatrixConfig; crate::SPLIT_PERIPHERALS_NUM],
@@ -227,7 +227,7 @@ async fn run_ble_keyboard<
 >(
     stack: &Stack<'_, C, DefaultPacketPool>,
     device_config: &DeviceConfig<'static>,
-    config: &BleBatteryConfig<'static>,
+    config: &BleBatteryConfig,
     #[cfg(feature = "host")] host_service: Option<&'r crate::host::HostService<'r>>,
 ) -> ! {
     let product_name = device_config.product_name;
@@ -510,24 +510,9 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                 let mut cccd_updated = false;
                 let result = match &gatt_event {
                     GattEvent::Read(event) => {
-                        if event.handle() == level.handle {
-                            let value = server.get(&level);
-                            debug!("Read GATT Event to Level: {:?}", value);
-                        } else {
-                            #[cfg(feature = "split")]
-                            let peripheral_level =
-                                peripheral_levels.iter().find(|level| event.handle() == level.handle);
-                            #[cfg(not(feature = "split"))]
-                            let peripheral_level: Option<&Characteristic<u8>> = None;
-                            if let Some(peripheral_level) = peripheral_level {
-                                let value = server.get(peripheral_level);
-                                debug!("Read GATT Event to Peripheral Level: {:?}", value);
-                            } else {
-                                debug!("Read GATT Event to Unknown: {:?}", event.handle());
-                            }
-                        }
-
+                        debug!("Read GATT Event: {:?}", event.handle());
                         if conn.raw().security_level()?.encrypted() {
+                            server.refresh_battery_level(event.handle());
                             None
                         } else {
                             Some(AttErrorCode::INSUFFICIENT_ENCRYPTION)
@@ -819,7 +804,7 @@ async fn serve_keyboard_connection<
     conn: &GattConnection<'a, 'b, DefaultPacketPool>,
     stack: &Stack<'_, C, DefaultPacketPool>,
     active_bond_info: Option<crate::ble::profile::ProfileInfo>,
-    config: &BleBatteryConfig<'a>,
+    config: &BleBatteryConfig,
     #[cfg(feature = "host")] host_service: Option<&'r crate::host::HostService<'r>>,
 ) {
     let mut ble_hid_server = BleHidServer::new(server, conn);
@@ -848,7 +833,7 @@ async fn serve_keyboard_connection<
     let dongle_link = crate::state::current_profile() == crate::ble::profile::DONGLE_PROFILE;
     #[cfg(not(feature = "dongle"))]
     let dongle_link = false;
-    let host_phy = if cfg!(feature = "use_1m_phy") && !dongle_link {
+    let host_phy = if !dongle_link && (!crate::BLE_USE_2M_PHY || cfg!(feature = "use_1m_phy")) {
         PhyKind::Le1M
     } else {
         PhyKind::Le2M
