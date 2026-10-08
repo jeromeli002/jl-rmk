@@ -30,9 +30,9 @@ pub struct NrfAdc<'a, const PIN_NUM: usize, const EVENT_NUM: usize> {
     buf_state: bool,
     adc_state: AdcState,
     active_instant: Instant,
-    sampled: bool,
-    next_battery: Instant,
-    battery_interval: Duration,
+    has_sample: bool,
+    next_battery_report: Instant,
+    battery_report_interval: Duration,
 }
 
 impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT_NUM> {
@@ -44,7 +44,7 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
         polling_interval: Duration,
         light_sleep: Option<Duration>,
     ) -> Self {
-        let battery_interval = if event_type
+        let battery_report_interval = if event_type
             .iter()
             .any(|event| matches!(event, AnalogEventType::Joystick(_)))
         {
@@ -64,9 +64,9 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
             buf_state: false,
             adc_state: AdcState::LightSleep,
             active_instant: Instant::MIN,
-            sampled: false,
-            next_battery: Instant::MIN,
-            battery_interval,
+            has_sample: false,
+            next_battery_report: Instant::MIN,
+            battery_report_interval,
         }
     }
 }
@@ -74,20 +74,21 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
 impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT_NUM> {
     async fn read_nrf_adc_event(&mut self) -> NrfAdcEvent {
         loop {
+            // Sample once, then return every event from that scan before waiting again.
             if self.event_state == EVENT_NUM as u8 {
-                if self.sampled {
+                if self.has_sample {
                     let interval = if self.adc_state == AdcState::LightSleep {
                         self.light_sleep.unwrap_or(self.polling_interval)
                     } else {
                         self.polling_interval
                     };
                     embassy_time::Timer::after(interval).await;
+                    if self.channel_state != PIN_NUM as u8 {
+                        error!("ADC channel count does not match the configured events");
+                    }
                 }
                 if self.active_instant.elapsed().as_millis() > 1200 {
                     self.adc_state = AdcState::LightSleep;
-                }
-                if self.sampled && self.channel_state != PIN_NUM as u8 {
-                    error!("NrfAdc's pin size and event's required is mismatch");
                 }
                 self.buf_state = !self.buf_state;
                 let buf = if self.buf_state {
@@ -102,7 +103,7 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
                         AnalogEventType::Battery => channel += 1,
                         AnalogEventType::Joystick(axes) => {
                             let end = channel + usize::from(*axes);
-                            if self.sampled
+                            if self.has_sample
                                 && self.buf[0][channel..end]
                                     .iter()
                                     .zip(&self.buf[1][channel..end])
@@ -115,7 +116,7 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
                         }
                     }
                 }
-                self.sampled = true;
+                self.has_sample = true;
                 self.channel_state = 0;
                 self.event_state = 0;
             }
@@ -161,10 +162,11 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
                         (u32::from(buf[self.channel_state as usize].max(0) as u16) * 3600 / 4096) as u16;
                     self.channel_state += 1;
                     self.event_state += 1;
-                    if Instant::now() < self.next_battery {
+                    let now = Instant::now();
+                    if now < self.next_battery_report {
                         continue;
                     }
-                    self.next_battery = Instant::now() + self.battery_interval;
+                    self.next_battery_report = now + self.battery_report_interval;
                     return NrfAdcEvent::Battery(BatteryAdcEvent(battery_adc_value));
                 }
             };

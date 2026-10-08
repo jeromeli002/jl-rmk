@@ -14,6 +14,10 @@ TODO:
 - [ ] a more intuitive way to configure the joystick
 - [ ] more functions besides mouse
 
+## Sampling
+
+Joystick axes from one ADC scan are reported together. When a joystick shares the ADC with battery measurement, battery reports are limited to one every 30 seconds. Battery voltage changes do not keep the joystick in its active sampling mode.
+
 ## `toml` configuration
 
 ```toml
