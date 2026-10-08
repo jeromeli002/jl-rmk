@@ -123,6 +123,21 @@ battery_user_description = "Right"
 
 For an existing configuration with battery fields under `[ble]` or directly under a split board, see [Migrate battery configuration](../migration/v09_v10#battery-configuration-tables).
 
+### RP2040 battery input
+
+Set `battery_adc_pin` to an ADC-capable pin, such as `PIN_26`, and set the divider values to match your board. RP2040 voltage measurement assumes a 3.3 V ADC reference.
+
+For a unibody board with a 1:2 divider:
+
+```toml
+[battery]
+battery_adc_pin = "PIN_26"
+adc_divider_measured = 1
+adc_divider_total = 2
+```
+
+For a split board, put these fields in its central or peripheral battery table. RMK waits 30 seconds before each sample, including the first. If a read fails, it keeps the previous reading and retries at the next sampling interval. Boards with a different ADC reference need a custom Rust reader that publishes ADC input millivolts.
+
 ### Peripheral battery reporting over BLE GATT
 
 When peripherals are configured to sample their batteries (see above), their levels are forwarded to the central over the split BLE links and re-exposed to the host through standard Battery Service instances (UUID `0x180F`) on the central's GATT server. The host sees one Battery Service instance for:
