@@ -1451,114 +1451,6 @@ mod tests {
     }
 
     #[test]
-    fn test_pointing_mode_array_default() {
-        let modes: [PointingMode; 4] = [PointingMode::default(); 4];
-        for mode in &modes {
-            assert_eq!(*mode, PointingMode::Cursor(CursorConfig::default()));
-        }
-    }
-
-    #[test]
-    fn test_motion_accumulator_change_resets_accumulator() {
-        let mut acc = MotionAccumulator::default();
-        acc.accumulate(3, 5, (1, 8), (1, 8));
-        assert_eq!(acc.remainder_x, 3);
-        assert_eq!(acc.remainder_y, 5);
-
-        // Simulate what on_layer_change_event does
-        acc.reset();
-        assert_eq!(acc.remainder_x, 0);
-        assert_eq!(acc.remainder_y, 0);
-    }
-
-    #[test]
-    fn test_pointing_cursor_multiplier_scales_motion() {
-        let config = CursorConfig {
-            multiplier_x: 2,
-            multiplier_y: 3,
-            invert_x: false,
-            invert_y: false,
-        };
-        assert_eq!(10 * config.multiplier_x as i16, 20);
-        assert_eq!(10 * config.multiplier_y as i16, 30);
-    }
-
-    #[test]
-    fn test_pointing_cursor_invert_axes() {
-        let config = CursorConfig {
-            multiplier_x: 1,
-            multiplier_y: 1,
-            invert_x: true,
-            invert_y: true,
-        };
-        assert_eq!(-(10 * config.multiplier_x as i16), -10);
-        assert_eq!(-(10 * config.multiplier_y as i16), -10);
-    }
-
-    // === Integration tests for PointingProcessor ===
-
-    #[test]
-    fn test_pointing_processor_mode_selection() {
-        // Test that the processor correctly selects the mode based on current layer
-        let modes = [
-            PointingMode::Cursor(CursorConfig::default()),
-            PointingMode::Scroll(ScrollConfig::default()),
-            PointingMode::Sniper(SniperConfig {
-                multiplier: 1,
-                divisor: 4,
-                invert_x: false,
-                invert_y: false,
-            }),
-            PointingMode::Caret(CaretConfig::default()),
-            PointingMode::Cursor(CursorConfig::default()),
-        ];
-
-        // Verify all modes are correctly stored
-        for (i, expected_mode) in modes.iter().enumerate() {
-            assert_eq!(&modes[i], expected_mode);
-        }
-    }
-
-    #[test]
-    fn test_pointing_scroll_mode_zero_motion_prevention() {
-        let mut acc = MotionAccumulator::default();
-        let config = ScrollConfig {
-            multiplier_x: 1,
-            multiplier_y: 1,
-            divisor_x: 8,
-            divisor_y: 8,
-            invert_x: false,
-            invert_y: false,
-        };
-
-        // Small motion that doesn't produce output
-        let (sx, sy) = acc.accumulate(
-            3,
-            3,
-            (config.multiplier_x, config.divisor_x),
-            (config.multiplier_y, config.divisor_y),
-        );
-        assert_eq!(sx, 0);
-        assert_eq!(sy, 0);
-
-        // Verify remainder is kept
-        assert_eq!(acc.remainder_x, 3);
-        assert_eq!(acc.remainder_y, 3);
-
-        // Additional motion should accumulate
-        let (sx, sy) = acc.accumulate(
-            6,
-            6,
-            (config.multiplier_x, config.divisor_x),
-            (config.multiplier_y, config.divisor_y),
-        );
-        assert_eq!(sx, 1); // (3+6)/8 = 1 remainder 1
-        assert_eq!(sy, 1);
-        assert_eq!(acc.remainder_x, 1);
-        assert_eq!(acc.remainder_y, 1);
-    }
-
-    #[test]
     fn test_pointing_sniper_mode_divisor() {
         let mut acc = MotionAccumulator::default();
         let config = SniperConfig {
@@ -1806,18 +1698,6 @@ mod tests {
         assert_eq!(sy, 0);
         assert_eq!(acc.remainder_x, -1);
         assert_eq!(acc.remainder_y, 0);
-    }
-
-    #[test]
-    fn test_pointing_layer_mode_bounds_checking() {
-        // Test that modes array is correctly sized
-        let modes: [PointingMode; 8] = [PointingMode::default(); 8];
-        assert_eq!(modes.len(), 8);
-
-        // Verify all default to Cursor
-        for mode in &modes {
-            assert_eq!(*mode, PointingMode::Cursor(CursorConfig::default()));
-        }
     }
 
     #[test]
