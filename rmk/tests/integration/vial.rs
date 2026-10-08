@@ -449,3 +449,130 @@ fn behavior_write_survives_restart() {
             .await;
     });
 }
+
+/// QMK's `TT(1)`, as Vial sends it.
+const TT1: u16 = 0x52C1;
+
+/// `TT(1)` at (0,0) after Vial writes it, B at (0,1) with C on layer 1.
+async fn tt_keyboard() -> SimKeyboard {
+    let mut keyboard = SimKeyboard::builder([[[k!(A), k!(B)]], [[rmk::a!(Transparent), k!(C)]]])
+        .build()
+        .await;
+    let mut request = via(ViaCommand::DynamicKeymapSetKeyCode);
+    request[1..4].copy_from_slice(&[0, 0, 0]);
+    request[4..6].copy_from_slice(&TT1.to_be_bytes());
+    keyboard.echo(request);
+    keyboard
+}
+
+/// The exchange `elimkeys-tt-repro.py` makes: write `TT(1)`, read it back.
+#[test]
+fn tt_write_reads_back_as_tt() {
+    test_block_on(async {
+        let mut keyboard = tt_keyboard().await;
+        let mut request = via(ViaCommand::DynamicKeymapGetKeyCode);
+        request[1..4].copy_from_slice(&[0, 0, 0]);
+        let mut reply = request;
+        reply[4..6].copy_from_slice(&TT1.to_be_bytes());
+        keyboard.host_exchange(request, reply);
+        keyboard.run().await;
+    });
+}
+
+/// A tap toggles layer 1 on, a second tap toggles it off.
+#[test]
+fn tt_tap_toggles_the_layer() {
+    test_block_on(async {
+        let mut keyboard = tt_keyboard().await;
+        keyboard
+            .tap(0, 0, 10)
+            .delay(300)
+            .tap(0, 1, 10)
+            .expect_keys([HidKeyCode::C])
+            .expect_keys([])
+            .tap(0, 0, 10)
+            .delay(300)
+            .tap(0, 1, 10)
+            .expect_keys([HidKeyCode::B])
+            .expect_keys([])
+            .run()
+            .await;
+    });
+}
+
+/// A hold turns layer 1 on only while held.
+#[test]
+fn tt_hold_is_momentary() {
+    test_block_on(async {
+        let mut keyboard = tt_keyboard().await;
+        keyboard
+            .press(0, 0)
+            .delay(300)
+            .tap(0, 1, 10)
+            .expect_keys([HidKeyCode::C])
+            .expect_keys([])
+            .release(0, 0)
+            .delay(50)
+            .tap(0, 1, 10)
+            .expect_keys([HidKeyCode::B])
+            .expect_keys([])
+            .run()
+            .await;
+    });
+}
+
+/// `TT(1)` written over Vial is still `TT(1)` after a restart.
+#[cfg(feature = "storage")]
+#[test]
+fn tt_write_survives_restart() {
+    test_block_on(async {
+        let keymap = [[[k!(A), k!(B)]], [[rmk::a!(Transparent), k!(C)]]];
+        let flash = crate::simulator::Flash::new();
+        {
+            let mut keyboard = SimKeyboard::builder(keymap).build_with_flash(flash.clone()).await;
+            let mut request = via(ViaCommand::DynamicKeymapSetKeyCode);
+            request[1..4].copy_from_slice(&[0, 0, 0]);
+            request[4..6].copy_from_slice(&TT1.to_be_bytes());
+            keyboard.echo(request);
+            keyboard.run().await;
+        }
+        let mut keyboard = SimKeyboard::builder(keymap).build_with_flash(flash).await;
+        let mut request = via(ViaCommand::DynamicKeymapGetKeyCode);
+        request[1..4].copy_from_slice(&[0, 0, 0]);
+        let mut reply = request;
+        reply[4..6].copy_from_slice(&TT1.to_be_bytes());
+        keyboard.host_exchange(request, reply);
+        keyboard
+            .tap(0, 0, 10)
+            .delay(300)
+            .tap(0, 1, 10)
+            .expect_keys([HidKeyCode::C])
+            .expect_keys([])
+            .run()
+            .await;
+    });
+}
+
+#[test]
+fn high_layer_momentary_write_activates_the_requested_layer() {
+    test_block_on(async {
+        let mut keymap = [[[rmk::a!(Transparent), k!(B)]]; 32];
+        keymap[16][0][1] = k!(C);
+        let mut keyboard = SimKeyboard::builder(keymap).build().await;
+        let mut request = via(ViaCommand::DynamicKeymapSetKeyCode);
+        request[4..6].copy_from_slice(&0x5230u16.to_be_bytes()); // MO(16)
+        keyboard.echo(request);
+        keyboard
+            .press(0, 0)
+            .tap(0, 1, 10)
+            .expect_keys([HidKeyCode::C])
+            .expect_keys([])
+            .release(0, 0)
+            .tap(0, 1, 10)
+            .expect_keys([HidKeyCode::B])
+            .expect_keys([]);
+        request[0] = ViaCommand::DynamicKeymapGetKeyCode as u8;
+        keyboard.echo(request);
+        keyboard.run().await;
+    });
+}

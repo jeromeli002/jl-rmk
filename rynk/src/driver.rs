@@ -264,8 +264,8 @@ impl Client {
     /// Return the next request SEQ, cycling through `1..=255`. 0 marks a free
     /// slot, so it is never handed out.
     fn alloc_seq(&self) -> u8 {
-        // `fetch_update` cannot fail because the closure always returns `Some`.
-        let (Ok(seq) | Err(seq)) = self.next_seq.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |s| {
+        // `try_update` cannot fail because the closure always returns `Some`.
+        let (Ok(seq) | Err(seq)) = self.next_seq.try_update(Ordering::Relaxed, Ordering::Relaxed, |s| {
             Some(if s == u8::MAX { 1 } else { s + 1 })
         });
         seq
