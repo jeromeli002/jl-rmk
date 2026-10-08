@@ -206,11 +206,6 @@ fn expand_bind_interrupt_for_split_peripheral(
             } else {
                 quote! {}
             };
-            let use_2m_phy = if ble_config.use_2m_phy.unwrap_or(true) {
-                quote! { .support_le_2m_phy() }
-            } else {
-                quote! {}
-            };
 
             // Extract PMW33xx configuration
             let split_config = match &hardware.board {
@@ -305,7 +300,7 @@ fn expand_bind_interrupt_for_split_peripheral(
                         .support_phy_update_central()
                         .support_phy_update_peripheral()
                         #support_subrating
-                        #use_2m_phy
+                        .support_le_2m_phy()
                         #tx_power
                         .peripheral_count(1)?
                         .buffer_cfg(L2CAP_MTU as u16, L2CAP_MTU as u16, L2CAP_TXQ, L2CAP_RXQ)?
@@ -707,9 +702,7 @@ pub(crate) fn expand_peripheral_input_device_config(
 
     let board = &hardware.board;
     let chip = &hardware.chip;
-    let battery = hardware
-        .battery_config(Some(id))
-        .expect("invalid peripheral battery config");
+    let battery = &hardware.peripheral_batteries[id];
     let joystick = match board {
         BoardConfig::Split(split) => split.peripheral[id]
             .input_device
@@ -721,7 +714,7 @@ pub(crate) fn expand_peripheral_input_device_config(
     };
     let (adc_devices, adc_processors) =
         expand_adc_device(joystick, battery.adc.as_ref(), chip.series.clone());
-    let (battery_devices, battery_processors) = expand_battery_devices(chip, &battery);
+    let (battery_devices, battery_processors) = expand_battery_devices(chip, battery);
 
     for initializer in adc_devices.into_iter().chain(battery_devices) {
         initializations.extend(initializer.initializer);

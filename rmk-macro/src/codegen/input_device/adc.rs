@@ -120,6 +120,54 @@ pub(crate) fn expand_adc_device(
                 (Vec::new(), Vec::new())
             }
         }
+        ChipSeries::Rp2040 => {
+            let Some(adc) = battery_adc else {
+                return (Vec::new(), Vec::new());
+            };
+            let pin = format_ident!("{}", adc.pin);
+            (
+                vec![Initializer {
+                    initializer: quote! {
+                        let mut adc_device = {
+                            use ::embassy_rp::adc::{Adc, Channel, Config, InterruptHandler};
+                            ::embassy_rp::bind_interrupts!(struct BatteryAdcIrqs {
+                                ADC_IRQ_FIFO => InterruptHandler;
+                            });
+                            let adc = Adc::new(p.ADC, BatteryAdcIrqs, Config::default());
+                            let pin = Channel::new_pin(p.#pin, ::embassy_rp::gpio::Pull::None);
+                            ::rmk::input_device::adc::rp2040::Rp2040BatteryAdc::new(
+                                adc, pin, ::rmk::embassy_time::Duration::from_secs(30),
+                            )
+                        };
+                    },
+                    var_name: format_ident!("adc_device"),
+                }],
+                Vec::new(),
+            )
+        }
+        ChipSeries::Esp32 => {
+            let Some(adc) = battery_adc else {
+                return (Vec::new(), Vec::new());
+            };
+            let pin = format_ident!("{}", adc.pin);
+            (
+                vec![Initializer {
+                    initializer: quote! {
+                        let mut adc_device = {
+                            use ::esp_hal::analog::adc::{Adc, AdcConfig, AdcCalLine, Attenuation};
+                            let mut config = AdcConfig::new();
+                            let pin = config.enable_pin_with_cal::<_, AdcCalLine<_>>(p.#pin, Attenuation::_11dB);
+                            let adc = Adc::new(p.ADC1, config).into_async();
+                            ::rmk::input_device::adc::esp32::Esp32BatteryAdc::new(
+                                adc, pin, ::rmk::embassy_time::Duration::from_secs(30),
+                            )
+                        };
+                    },
+                    var_name: format_ident!("adc_device"),
+                }],
+                Vec::new(),
+            )
+        }
         _ => {
             assert!(
                 battery_adc.is_none(),
