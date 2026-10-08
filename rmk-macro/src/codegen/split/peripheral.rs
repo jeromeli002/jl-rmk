@@ -3,8 +3,8 @@ use quote::{format_ident, quote};
 use rmk_config::SplitConnection;
 use rmk_config::resolved::Hardware;
 use rmk_config::resolved::hardware::{
-    BleConfig, BoardConfig, ChipModel, ChipSeries, CommunicationConfig, DfuConfig,
-    InputDeviceConfig, MatrixType, SplitBoardConfig, SplitConfig,
+    BoardConfig, ChipModel, ChipSeries, DfuConfig, InputDeviceConfig, MatrixType, SplitBoardConfig,
+    SplitConfig,
 };
 use syn::ItemMod;
 
@@ -18,6 +18,7 @@ use crate::codegen::entry::join_all_tasks;
 use crate::codegen::feature::{get_rmk_features, is_feature_enabled};
 use crate::codegen::import::expand_custom_imports;
 use crate::codegen::input_device::adc::expand_adc_device;
+use crate::codegen::input_device::battery::expand_battery_devices;
 use crate::codegen::input_device::encoder::expand_encoder_device;
 use crate::codegen::input_device::iqs5xx::{expand_iqs5xx_device, expand_iqs5xx_interrupts};
 use crate::codegen::input_device::pmw33xx::expand_pmw33xx_device;
@@ -205,11 +206,6 @@ fn expand_bind_interrupt_for_split_peripheral(
             } else {
                 quote! {}
             };
-            let use_2m_phy = if ble_config.use_2m_phy.unwrap_or(true) {
-                quote! { .support_le_2m_phy() }
-            } else {
-                quote! {}
-            };
 
             // Extract PMW33xx configuration
             let split_config = match &hardware.board {
@@ -304,7 +300,7 @@ fn expand_bind_interrupt_for_split_peripheral(
                         .support_phy_update_central()
                         .support_phy_update_peripheral()
                         #support_subrating
-                        #use_2m_phy
+                        .support_le_2m_phy()
                         #tx_power
                         .peripheral_count(1)?
                         .buffer_cfg(L2CAP_MTU as u16, L2CAP_MTU as u16, L2CAP_TXQ, L2CAP_RXQ)?
@@ -704,59 +700,29 @@ pub(crate) fn expand_peripheral_input_device_config(
     let mut devices = Vec::new();
     let mut processors = Vec::new();
 
-    let communication = &hardware.communication;
-    let ble_config = match communication {
-        CommunicationConfig::Ble(ble_config) | CommunicationConfig::Both(_, ble_config) => {
-            Some(ble_config.clone())
-        }
-        _ => None,
-    };
     let board = &hardware.board;
     let chip = &hardware.chip;
-
-    // Create peripheral-specific BLE config for battery
-    // Only use peripheral's own battery config, do NOT fallback to top-level BLE config
-    let peripheral_ble_config = match board {
-        BoardConfig::Split(split_config) => {
-            let peripheral_board = &split_config.peripheral[id];
-            // If peripheral has battery config, create a BleConfig with those settings
-            if peripheral_board.battery_adc_pin.is_some() {
-                Some(BleConfig {
-                    enabled: true,
-                    battery_adc_pin: peripheral_board.battery_adc_pin.clone(),
-                    adc_divider_measured: peripheral_board.adc_divider_measured,
-                    adc_divider_total: peripheral_board.adc_divider_total,
-                    ..Default::default()
-                })
-            } else {
-                None
-            }
-        }
-        _ => ble_config.clone(),
+    let battery = &hardware.peripheral_batteries[id];
+    let joystick = match board {
+        BoardConfig::Split(split) => split.peripheral[id]
+            .input_device
+            .clone()
+            .unwrap_or_default()
+            .joystick
+            .unwrap_or_default(),
+        _ => Vec::new(),
     };
+    let (adc_devices, adc_processors) =
+        expand_adc_device(joystick, battery.adc.as_ref(), chip.series.clone());
+    let (battery_devices, battery_processors) = expand_battery_devices(chip, battery);
 
-    // generate ADC configuration
-    let (adc_devices, adc_processors) = match board {
-        BoardConfig::Split(split_config) => expand_adc_device(
-            split_config.peripheral[id]
-                .input_device
-                .clone()
-                .unwrap_or(InputDeviceConfig::default())
-                .joystick
-                .unwrap_or(Vec::new()),
-            peripheral_ble_config,
-            chip.series.clone(),
-        ),
-        _ => (vec![], vec![]),
-    };
-
-    for initializer in adc_devices {
+    for initializer in adc_devices.into_iter().chain(battery_devices) {
         initializations.extend(initializer.initializer);
         let device_name = initializer.var_name;
         devices.push(quote! { #device_name });
     }
 
-    for initializer in adc_processors {
+    for initializer in adc_processors.into_iter().chain(battery_processors) {
         initializations.extend(initializer.initializer);
         let processor_name = initializer.var_name;
         processors.push(quote! { #processor_name });

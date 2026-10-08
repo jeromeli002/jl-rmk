@@ -8,11 +8,9 @@ trackpad modules.
 
 - `keyboard.toml` configuration is supported on nRF52 and RP2040 only; other chips
   need the [Rust API](#rust-configuration).
-- Currently only relative single-finger cursor movement is reported. Gestures,
-  multi-finger absolute positions, pressure, area, and raw channel data are
-  read from the IC but not yet published as RMK events.
-- Scaling is not supported yet; cursor movements will likely feel fast and
-  imprecise.
+- Only relative single-finger movement is supported. Gestures, absolute finger
+  positions, pressure, area, and raw channel data are not supported.
+- Use [Sniper mode](./pointing_processor#sniper) to reduce cursor sensitivity.
 - An `RDY` (ready) pin is strongly recommended. Without it, the driver falls
   back to timed polling and may stall the I²C bus through clock-stretching if
   it polls mid-cycle. See [RDY vs polling](#rdy-vs-polling).

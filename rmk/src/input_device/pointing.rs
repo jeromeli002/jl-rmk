@@ -1973,18 +1973,6 @@ mod tests {
     }
 
     #[test]
-    fn test_pointing_layer_mode_bounds_checking() {
-        // Test that modes array is correctly sized
-        let modes: [PointingMode; 8] = [PointingMode::default(); 8];
-        assert_eq!(modes.len(), 8);
-
-        // Verify all default to Cursor
-        for mode in &modes {
-            assert_eq!(*mode, PointingMode::Cursor(CursorConfig::default()));
-        }
-    }
-
-    #[test]
     fn test_motion_accumulator_saturation() {
         let mut acc = MotionAccumulator::default();
 
