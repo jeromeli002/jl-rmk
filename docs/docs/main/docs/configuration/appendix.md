@@ -350,7 +350,7 @@ unlock_keys = [[0, 0], [1, 1]]
 enabled = true
 # BLE tx power; higher means better signal but more power consumption. nRF52 only, ignored on other chips
 default_tx_power = 0
-# Whether to enable 2M PHY, defaults to true. nRF52 only, ignored on other chips
+# Host connection PHY: true = 2M (default), false = 1M.
 use_2m_phy = true
 # Enable passkey entry during BLE pairing, defaults to false
 passkey_entry = false
