@@ -196,6 +196,11 @@ impl KeyboardTomlConfig {
         let mut config = Self::parse_from_toml_path(path, Some(default_config_str));
         config.set_storage_user_flags(user_config.storage.as_ref());
         config.dfu_user_set = user_config.dfu.is_some();
+        // Split battery resolution applies the preset per side; only an explicit
+        // top-level [battery] should reach its validation error.
+        if config.split.is_some() && user_config.battery.is_none() {
+            config.battery = None;
+        }
 
         config.auto_calculate_parameters();
 
@@ -550,6 +555,7 @@ define_event_config!(
     charging_state,
     // Pointing device events
     pointing,
+    touch,
     // Split events
     peripheral_connected,
     central_connected,
@@ -1017,6 +1023,7 @@ pub(crate) struct ForkConfig {
     pub match_none: Option<String>,
     pub kept_modifiers: Option<String>,
     pub bindable: Option<bool>,
+    pub layers: Option<Vec<u8>>,
 }
 
 /// Configurations for morse keys

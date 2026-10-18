@@ -855,7 +855,7 @@ impl<'a> Keyboard<'a> {
             self.process_key_action_morse(&key_action, event, event_time).await;
         }
         // Restore the modifiers the fork suppressed
-        if self.try_finish_forks(original_key_action, event) {
+        if self.try_finish_forks(event) {
             self.send_keyboard_report_with_resolved_modifiers(false).await;
         }
     }
@@ -870,21 +870,12 @@ impl<'a> Keyboard<'a> {
         }
 
         if !event.pressed {
-            let fork_states = &self.fork_states;
-            let result = self.keymap.with_forks(|forks| {
-                for (i, fork) in forks.iter().enumerate() {
-                    if fork.trigger == *key_action
-                        && let Some(active) = fork_states[i]
-                    {
-                        // If the originating key of a fork is released, simply release the replacement key
-                        // (The fork deactivation is delayed, will happen after the release hid report is sent)
-                        debug!("replace input with fork action {:?}", active);
-                        return Some(active.replacement);
-                    }
-                }
-                None
-            });
-            return (result.unwrap_or(*key_action), false);
+            // Release the replacement; the fork is deactivated after the release report is sent
+            if let Some(active) = self.fork_states.iter().flatten().find(|active| active.pos == event.pos) {
+                debug!("replace input with fork action {:?}", active);
+                return (active.replacement, false);
+            }
+            return (*key_action, false);
         }
 
         let mut decision_state = StateBits {
@@ -893,6 +884,7 @@ impl<'a> Keyboard<'a> {
             leds: LedIndicator::from_bits(LOCK_LED_STATES.load(core::sync::atomic::Ordering::Relaxed)),
             mouse: MouseButtons::from_bits(self.mouse.report.buttons),
         };
+        let layer_bit = 1u32.checked_shl(self.keymap.pressed_layer(event.pos).into());
 
         let fork_states = &self.fork_states;
         let fork_keep_mask = &mut self.fork_keep_mask;
@@ -904,7 +896,11 @@ impl<'a> Keyboard<'a> {
 
             'bind: loop {
                 for (i, fork) in forks.iter().enumerate() {
-                    if !triggered_forks[i] && fork_states[i].is_none() && fork.trigger == replacement {
+                    if !triggered_forks[i]
+                        && fork_states[i].is_none()
+                        && fork.trigger == replacement
+                        && (fork.layers == u32::MAX || layer_bit.is_some_and(|bit| fork.layers & bit != 0))
+                    {
                         let decision = (fork.match_any & decision_state) != StateBits::default()
                             && (fork.match_none & decision_state) == StateBits::default();
 
@@ -960,6 +956,7 @@ impl<'a> Keyboard<'a> {
             self.fork_states[initial] = Some(ActiveFork {
                 replacement,
                 suppress: combined_suppress,
+                pos: event.pos,
             });
         }
 
@@ -978,18 +975,14 @@ impl<'a> Keyboard<'a> {
     // Release of forked key must deactivate the fork
     // (explicit modifier suppressing effect will be stopped only AFTER the release hid report is sent)
     // Returns whether the resolved modifiers changed
-    fn try_finish_forks(&mut self, original_key_action: &KeyAction, event: KeyboardEvent) -> bool {
+    fn try_finish_forks(&mut self, event: KeyboardEvent) -> bool {
         let modifiers_before = self.resolve_modifiers(false);
         if !event.pressed {
-            let fork_states = &mut self.fork_states;
-            self.keymap.with_forks(|forks| {
-                for (i, fork) in forks.iter().enumerate() {
-                    if fork_states[i].is_some() && fork.trigger == *original_key_action {
-                        // if the originating key of a fork is released the replacement decision is not valid anymore
-                        fork_states[i] = None;
-                    }
+            for fork_state in self.fork_states.iter_mut() {
+                if fork_state.is_some_and(|active| active.pos == event.pos) {
+                    *fork_state = None;
                 }
-            });
+            }
         }
         self.resolve_modifiers(false) != modifiers_before
     }
@@ -1967,14 +1960,14 @@ pub enum HeldKeyDecision {
 mod test {
 
     use embassy_time::Duration;
-    use rmk_types::action::KeyAction;
+    use rmk_types::action::{KeyAction, TouchAction, TouchGesture};
     use rmk_types::fork::Fork;
     use rmk_types::modifier::ModifierCombination;
     use rmk_types::morse::{MorseMode, MorseProfile};
 
     use super::*;
     use crate::config::{BehaviorConfig, ForksConfig, PositionalConfig};
-    use crate::event::{KeyPos, KeyboardEvent, KeyboardEventPos};
+    use crate::event::{KeyPos, KeyboardEvent, KeyboardEventPos, TouchPos};
     use crate::test_support::test_block_on as block_on;
     use crate::{a, k, layer, mo, th, thp};
 
@@ -2038,6 +2031,83 @@ mod test {
             fork: cfg,
             ..BehaviorConfig::default()
         })
+    }
+
+    /// A test keyboard with one touchpad, whose actions per layer come from `touch_map`.
+    fn create_test_keyboard_with_touch(touch_map: [[TouchAction; 1]; 2]) -> Keyboard<'static> {
+        let mut config = BehaviorConfig::default();
+        // `get_keymap`'s tap-hold at (row 2, col 1) references profile index 0.
+        let _ = config.morse.profiles.push(MorseProfile::new(
+            Some(true),
+            Some(MorseMode::PermissiveHold),
+            None,
+            None,
+        ));
+        let behavior_config: &'static mut BehaviorConfig = Box::leak(Box::new(config));
+        let per_key_config: &'static PositionalConfig<5, 14> = Box::leak(Box::new(PositionalConfig::default()));
+        let data = Box::leak(Box::new(
+            crate::keymap::KeymapData::new(get_keymap()).with_touch(touch_map),
+        ));
+        let keymap = Box::leak(Box::new(block_on(KeyMap::new(data, behavior_config, per_key_config))));
+        Keyboard::new(keymap)
+    }
+
+    /// A press or release of touchpad 0's tap.
+    fn tap(pressed: bool) -> KeyboardEvent {
+        KeyboardEvent {
+            pressed,
+            pos: KeyboardEventPos::Touch(TouchPos {
+                id: 0,
+                gesture: TouchGesture::Tap,
+            }),
+        }
+    }
+
+    #[test]
+    fn touch_gesture_runs_its_action_on_the_active_layer() {
+        let main = async {
+            let mut keyboard = create_test_keyboard_with_touch([
+                [TouchAction::new().with(TouchGesture::Tap, k!(B))],
+                [TouchAction::new().with(TouchGesture::Tap, k!(C))],
+            ]);
+
+            keyboard.process_inner(tap(true)).await;
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::B);
+            keyboard.process_inner(tap(false)).await;
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
+
+            // A tap started on layer 0 releases its layer 0 action after layer 1 turns on.
+            keyboard.process_inner(tap(true)).await;
+            keyboard.process_inner(KeyboardEvent::key(4, 9, true)).await;
+            keyboard.process_inner(tap(false)).await;
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
+
+            // With layer 1 on, the tap runs layer 1's action.
+            keyboard.process_inner(tap(true)).await;
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::C);
+            keyboard.process_inner(tap(false)).await;
+            keyboard.process_inner(KeyboardEvent::key(4, 9, false)).await;
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
+        };
+        block_on(main);
+    }
+
+    #[test]
+    fn a_transparent_touch_gesture_takes_the_action_below() {
+        let main = async {
+            let mut keyboard = create_test_keyboard_with_touch([
+                [TouchAction::new().with(TouchGesture::Tap, k!(B))],
+                [TouchAction::transparent()],
+            ]);
+
+            keyboard.process_inner(KeyboardEvent::key(4, 9, true)).await;
+            keyboard.process_inner(tap(true)).await;
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::B);
+            keyboard.process_inner(tap(false)).await;
+            keyboard.process_inner(KeyboardEvent::key(4, 9, false)).await;
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
+        };
+        block_on(main);
     }
 
     #[test]
@@ -2290,6 +2360,7 @@ mod test {
                 match_none: StateBits::default(),
                 kept_modifiers: ModifierCombination::default(),
                 bindable: false,
+                layers: u32::MAX,
             };
 
             //{ trigger = "Comma", negative_output = "Comma", positive_output = "Semicolon", match_any = "LShift|RShift" },
@@ -2307,6 +2378,7 @@ mod test {
                 match_none: StateBits::default(),
                 kept_modifiers: ModifierCombination::default(),
                 bindable: false,
+                layers: u32::MAX,
             };
 
             let mut keyboard = create_test_keyboard_with_forks(fork1, fork2);
@@ -2397,6 +2469,7 @@ mod test {
                     .with_left_shift(true)
                     .with_right_shift(true),
                 bindable: false,
+                layers: u32::MAX,
             };
 
             //{ trigger = "A", negative_output = "S", positive_output = "D", match_any = "MouseBtn5" },
@@ -2412,6 +2485,7 @@ mod test {
                 match_none: StateBits::default(),
                 kept_modifiers: ModifierCombination::default(),
                 bindable: false,
+                layers: u32::MAX,
             };
 
             let mut keyboard = create_test_keyboard_with_forks(fork1, fork2);

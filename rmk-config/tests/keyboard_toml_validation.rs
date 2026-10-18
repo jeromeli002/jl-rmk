@@ -197,6 +197,63 @@ adc_divider_total = 0
     );
 }
 
+#[test]
+fn split_keyboard_on_board_with_default_battery_resolves() {
+    let path = write_temp_keyboard_toml(
+        "split-board-battery",
+        r#"
+[keyboard]
+name = "RMK Test"
+vendor_id = 0x4c4b
+product_id = 0x4643
+board = "nice!nano_v2"
+
+[layout]
+rows = 1
+cols = 2
+
+[split]
+connection = "ble"
+
+[split.central]
+rows = 1
+cols = 1
+row_offset = 0
+col_offset = 0
+[split.central.battery]
+battery_adc_pin = "P0_05"
+[split.central.matrix]
+matrix_type = "normal"
+row_pins = ["P0_02"]
+col_pins = ["P0_03"]
+
+[[split.peripheral]]
+rows = 1
+cols = 1
+row_offset = 0
+col_offset = 1
+[split.peripheral.matrix]
+matrix_type = "normal"
+row_pins = ["P0_02"]
+col_pins = ["P0_03"]
+"#,
+    );
+    let configs = [
+        KeyboardTomlConfig::new_from_toml_path(&path),
+        KeyboardTomlConfig::new_from_toml_path_with_event_defaults(&path),
+    ];
+    std::fs::remove_file(path).unwrap();
+
+    for config in configs {
+        let central = config.resolve_battery_config(None).unwrap();
+        assert_eq!(central.battery_adc_pin.as_deref(), Some("P0_05"));
+        let peripheral = config.resolve_battery_config(Some(0)).unwrap();
+        assert_eq!(peripheral.battery_adc_pin.as_deref(), Some("vddh"));
+        let constants = config.build_constants(&["split", "_ble"]).unwrap();
+        assert_eq!(constants.split_battery_peripheral_ids, [0]);
+    }
+}
+
 /// Unknown keys in the sections users edit most must be rejected, not
 /// silently dropped (pre-fix they surfaced as a misleading "X is required"
 /// error that never named the typo).

@@ -90,11 +90,11 @@ pub struct Fork {
     pub match_none: StateBits,
     /// Modifiers to keep active when the fork fires.
     pub kept_modifiers: ModifierCombination,
-    /// Whether this fork can be rebound via protocol.
-    /// This is a firmware-enforced policy — the protocol itself does not
-    /// reject writes to non-bindable forks; enforcement happens in the
-    /// firmware's SetFork handler.
+    /// Whether this fork's output is checked against other forks that have not
+    /// yet triggered, allowing chained replacements.
     pub bindable: bool,
+    /// Bitmask of layers the trigger must come from. `u32::MAX` means all layers.
+    pub layers: u32,
 }
 
 impl Default for Fork {
@@ -121,6 +121,7 @@ impl Fork {
             match_none,
             kept_modifiers,
             bindable,
+            layers: u32::MAX,
         }
     }
 
