@@ -10,7 +10,7 @@
 #     #!/bin/bash
 #     set -euo pipefail
 #
-# Toolchain + tool installation (rustup components/targets, cargo-batch,
+# Toolchain + tool installation (rustup components/targets,
 # cargo-expand, espup) is the workflow's responsibility and lives in
 # .github/workflows/ci.yml. Locally the repo's rust-toolchain.toml takes
 # care of it, so these scripts stay side-effect-free on your machine.
@@ -65,7 +65,7 @@ RMK_FEATURESETS=(
 # Behavioral coverage only; RMK_FEATURESETS remains the compile/clippy matrix.
 RMK_TEST_FEATURESETS=(
     ""
-    "split,dfu_nrf,dfu_split,storage,async_matrix,embassy-nrf/nrf52840"
+    "split,_dfu,dfu_split,storage,async_matrix"
     "vial,host_lock,_no_usb,steno,passkey_entry"
     "rynk,_ble,split,async_matrix,storage"
     "_ble,ext_adv,split,storage,async_matrix"
