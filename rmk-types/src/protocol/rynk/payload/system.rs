@@ -20,8 +20,8 @@ pub struct ProtocolVersion {
 
 impl ProtocolVersion {
     /// Current protocol version for this firmware release.
-    /// Now the protocol is still being developed, so the version is v0.2
-    pub const CURRENT: Self = Self { major: 0, minor: 2 };
+    /// Before 1.0, a minor version change may reshape messages.
+    pub const CURRENT: Self = Self { major: 0, minor: 3 };
 }
 
 /// Device capabilities discovered during the connection handshake.
@@ -49,7 +49,7 @@ pub struct DeviceCapabilities {
     /// Whether `SetMacro` persists; a firmware without storage serves its
     /// compiled-in macros read-only.
     pub macros_writable: bool,
-    pub max_morse: u8,
+    pub max_morses: u8,
     pub max_patterns_per_key: u8,
     pub max_forks: u8,
 
@@ -61,7 +61,13 @@ pub struct DeviceCapabilities {
     pub is_split: bool,
     pub num_split_peripherals: u8,
     pub ble_enabled: bool,
+    /// Host profiles, indexed from 0; excludes the dongle profile.
     pub num_ble_profiles: u8,
+    /// Maximum simultaneous BLE host and dongle connections.
+    /// Excludes USB and split peripheral links; zero when BLE is unavailable.
+    pub max_connections: u8,
+    /// Index of the dongle profile; `None` without dongle support.
+    pub dongle_profile: Option<u8>,
 
     // -- Protocol limits --
     pub max_payload_size: u16,
@@ -193,7 +199,7 @@ mod tests {
             max_macros: 32,
             macro_space_size: 256,
             macros_writable: true,
-            max_morse: 8,
+            max_morses: 8,
             max_patterns_per_key: 8,
             max_forks: 4,
             storage_enabled: true,
@@ -202,6 +208,8 @@ mod tests {
             num_split_peripherals: 0,
             ble_enabled: true,
             num_ble_profiles: 4,
+            max_connections: 4,
+            dongle_profile: Some(4),
             max_payload_size: 256,
             max_bulk_keys: 32,
             max_bulk_items: 8,
@@ -217,7 +225,7 @@ mod tests {
             max_macros: 0,
             macro_space_size: 0,
             macros_writable: false,
-            max_morse: 0,
+            max_morses: 0,
             max_patterns_per_key: 0,
             max_forks: 0,
             storage_enabled: false,
@@ -226,6 +234,8 @@ mod tests {
             num_split_peripherals: 0,
             ble_enabled: false,
             num_ble_profiles: 0,
+            max_connections: 0,
+            dongle_profile: None,
             max_payload_size: 0,
             max_bulk_keys: 0,
             max_bulk_items: 0,
